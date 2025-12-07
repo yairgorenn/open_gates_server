@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")  # שים במשתנים ב־Railway
 print("🔥 Flask server is starting...")
-
+print(f"🔑 API Key: {PUSHBULLET_API_KEY}")
 
 # ------------------------
 # ROOT ROUTE

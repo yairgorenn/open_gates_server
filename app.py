@@ -5,6 +5,12 @@ import os
 app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")  # שים במשתנים ב־Railway
+print("🔥 Flask server is starting...")
+
+@app.route('/', methods=['GET'])
+def home():
+    print("✅ GET / called")
+    return "✅ Open Gates Server Running"
 
 @app.route('/open', methods=['POST'])
 def open_gate():

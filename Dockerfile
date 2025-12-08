@@ -13,8 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all project files
 COPY . .
 
-# Expose port 80 (Railway will route traffic here)
-EXPOSE 80
+# שינוי קריטי: לא חושפים פורט 80 קבוע, אלא משתמשים במשתנה הסביבה של Railway
+# הפקודה CMD למטה תטפל בזה.
 
-# Start Gunicorn on port 80
-CMD ["gunicorn", "--config", "python:None", "app:app", "--bind", "0.0.0.0:80", "--workers", "1"]
+# Start Gunicorn
+# שימוש בגרסת ה-Shell (ללא סוגריים מרובעים) כדי לאפשר קריאה של המשתנה $PORT
+CMD gunicorn app:app --bind 0.0.0.0:$PORT --workers 1

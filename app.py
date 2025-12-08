@@ -68,11 +68,6 @@ def open_gate():
 # ------------------------
 
 if __name__ == "__main__":
-    # מאפשר לקבוע פורט מה-Docker CMD
-    cli_port = None
-    for arg in sys.argv:
-        if arg.startswith("--port="):
-            cli_port = int(arg.split("=")[1])
-
-    port = cli_port if cli_port else int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8080))
+    print("PORT =", port)  # רק כדי שתראה בלוג
     app.run(host="0.0.0.0", port=port)

@@ -1,21 +1,16 @@
 # Base image
 FROM python:3.11-slim
 
-# Work directory
 WORKDIR /app
-
-# Make Python print logs immediately
 ENV PYTHONUNBUFFERED=1
 
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
 COPY . .
 
-# Railway sets PORT automatically — expose it
-EXPOSE 8000
+# Railway exposes dynamic port — just declare it
+EXPOSE 8080
 
-# Run Flask app using the environment PORT given by Railway
-CMD ["python", "app.py"]
+# Run gunicorn instead of Flask dev server
+CMD ["gunicorn", "-b", "0.0.0.0:${PORT}", "app:app"]

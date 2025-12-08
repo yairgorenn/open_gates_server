@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+import sys
 
 app = Flask(__name__)
 
@@ -65,6 +66,13 @@ def open_gate():
 # MAIN (only for local run)
 # Railway uses Gunicorn
 # ------------------------
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
+    # מאפשר לקבוע פורט מה-Docker CMD
+    cli_port = None
+    for arg in sys.argv:
+        if arg.startswith("--port="):
+            cli_port = int(arg.split("=")[1])
+
+    port = cli_port if cli_port else int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

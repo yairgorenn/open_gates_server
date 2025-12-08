@@ -17,6 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all project files
 COPY . .
 
-# ---- שינוי קריטי 2: הפעלת מצב Debug ----
-# הוספתי --log-level debug וגם הדפסה מפורשת של שגיאות
-CMD gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --log-level debug --access-logfile - --error-logfile -
+# --- השינוי: הרצה ישירה דרך פייתון ---
+# זה מבטיח שהפורט ייקרא נכון דרך הקוד שלך ב-app.py
+CMD ["python", "app.py"]

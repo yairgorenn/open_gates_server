@@ -1,15 +1,15 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import sys
 
 app = Flask(__name__)
 
+# API KEY של Pushbullet
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 
 
 # ------------------------
-# HEALTHCHECK (Railway)
+# HEALTH CHECK (Railway)
 # ------------------------
 @app.route("/", methods=["GET"])
 def home():
@@ -17,7 +17,7 @@ def home():
 
 
 # ------------------------
-# OPEN GATE ROUTE
+# OPEN GATE
 # ------------------------
 @app.route("/open", methods=["POST"])
 def open_gate():
@@ -35,7 +35,8 @@ def open_gate():
     if not PUSHBULLET_API_KEY:
         return jsonify({"error": "Server missing PUSHBULLET_API_KEY"}), 500
 
-    push_data = {
+    # הודעה ל־Pushbullet
+    push_payload = {
         "type": "note",
         "title": "Open Gate",
         "body": f"gate={gate};device={device}"
@@ -47,27 +48,24 @@ def open_gate():
     }
 
     try:
-        response = requests.post(
+        pb_response = requests.post(
             "https://api.pushbullet.com/v2/pushes",
-            json=push_data,
+            json=push_payload,
             headers=headers,
             timeout=5
         )
     except Exception as e:
         return jsonify({"error": f"Pushbullet error: {str(e)}"}), 500
 
-    if response.status_code == 200:
+    if pb_response.status_code == 200:
         return jsonify({"status": "sent"}), 200
     else:
-        return jsonify({"error": response.text}), 500
+        return jsonify({"error": pb_response.text}), 500
 
 
 # ------------------------
-# MAIN (only for local run)
-# Railway uses Gunicorn
+# LOCAL RUN ONLY
 # ------------------------
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    print("PORT =", port)  # רק כדי שתראה בלוג
     app.run(host="0.0.0.0", port=port)

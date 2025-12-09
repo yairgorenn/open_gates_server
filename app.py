@@ -53,11 +53,24 @@ def allowed_gates():
     if not token:
         return jsonify({"error": "token required"}), 400
 
+    # חיפוש המשתמש לפי הטוקן
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
-    return jsonify({"allowed": user["allowed"]})
+    allowed = user.get("allowed_gates")
+
+    # אם כתוב ALL
+    if isinstance(allowed, str) and allowed.upper() == "ALL":
+        # כל השערים מקובץ gates.json
+        all_gate_names = [g["name"] for g in GATES]
+        return jsonify({"allowed": all_gate_names}), 200
+
+    # אם זה לא "ALL", חייב להיות רשימה
+    if isinstance(allowed, list):
+        return jsonify({"allowed": allowed}), 200
+
+    return jsonify({"error": "invalid user permissions format"}), 500
 
 
 # ======================================

@@ -1,0 +1,40 @@
+{
+  "gates": [
+    {
+      "name": "Main",
+      "open_hours": [
+        {"from": "00:00", "to": "23:59"}
+      ]
+    },
+    {
+      "name": "Gay",
+      "open_hours": [
+        {"from": "00:00", "to": "23:59"}
+      ]
+    },
+    {
+      "name": "Enter",
+      "open_hours": [
+        {"from": "05:20", "to": "21:00"}
+      ]
+    },
+    {
+      "name": "Exit",
+      "open_hours": [
+        {"from": "05:20", "to": "21:00"}
+      ]
+    },
+    {
+      "name": "EinCarmel",
+      "open_hours": [
+        {"from": "00:00", "to": "23:59"}
+      ]
+    },
+    {
+      "name": "Almagor",
+      "open_hours": [
+        {"from": "00:00", "to": "23:59"}
+      ]
+    }
+  ]
+}

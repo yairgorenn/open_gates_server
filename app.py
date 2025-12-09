@@ -133,32 +133,34 @@ def open_gate():
 @app.route("/confirm", methods=["POST"])
 def confirm():
     data = request.get_json()
+    print("CONFIRM RECEIVED:", data, flush=True)  # כדי שיראה בלוג Railway בזמן אמת
 
     if not data or "status" not in data or "gate" not in data:
         return jsonify({"error": "status and gate required"}), 400
 
-    phone_status = data["status"]       # success / failed
+    phone_status = data["status"]   # success / failed
     gate = data["gate"]
 
+    # טען סטטוס
     status = load_json("device_status.json")
 
     if not status["busy"]:
         return jsonify({"error": "no active request"}), 400
 
-    # ---- בדיקת התאמה ----
+    # ודא שהטלפון מאשר את השער הנכון
     if status["current_gate"] != gate:
         return jsonify({"error": "gate mismatch"}), 400
 
     user = status["waiting_client"]
 
-    # ---- ניקוי מצב ----
+    # אפס סטטוס
     status["busy"] = False
     status["current_gate"] = None
     status["waiting_client"] = None
     status["timestamp"] = None
     save_json("device_status.json", status)
 
-    # ---- החזרת תוצאה ----
+    # תשובה
     if phone_status == "success":
         return jsonify({"status": "gate_opened", "gate": gate, "user": user}), 200
     else:
@@ -187,18 +189,7 @@ def check_timeout():
 
     return jsonify({"status": "waiting", "remaining": 30 - elapsed}), 200
 
-@app.route("/confirm", methods=["POST"])
-def confirm():
-    data = request.get_json()
-    print("CONFIRM RECEIVED:", data)  # הדפסה ללוג Railway
 
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    status = data.get("status")
-    gate = data.get("gate")
-
-    return jsonify({"received": True, "status": status, "gate": gate}), 200
 
 # -----------------------------
 # RUN LOCAL

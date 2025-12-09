@@ -50,26 +50,32 @@ def home():
 @app.route("/allowed_gates", methods=["GET"])
 def allowed_gates():
     token = request.args.get("token")
+
+    # אין טוקן
     if not token:
         return jsonify({"error": "token required"}), 400
 
-    # חיפוש המשתמש לפי הטוקן
+    # חיפוש המשתמש
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
     allowed = user.get("allowed_gates")
 
-    # אם כתוב ALL
+    # ---------- ALL ----------
+    # אם כתוב ALL – המשתמש יכול לפתוח את כל השערים
     if isinstance(allowed, str) and allowed.upper() == "ALL":
-        # כל השערים מקובץ gates.json
-        all_gate_names = [g["name"] for g in GATES]
+        try:
+            all_gate_names = [g["name"] for g in GATES]
+        except Exception as e:
+            return jsonify({"error": f"gates.json invalid: {str(e)}"}), 500
         return jsonify({"allowed": all_gate_names}), 200
 
-    # אם זה לא "ALL", חייב להיות רשימה
+    # ---------- רשימת שערים ספציפית ----------
     if isinstance(allowed, list):
         return jsonify({"allowed": allowed}), 200
 
+    # ---------- פורמט לא תקין ----------
     return jsonify({"error": "invalid user permissions format"}), 500
 
 

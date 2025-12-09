@@ -88,20 +88,27 @@ def allowed_gates():
 # ======================================
 
 def gate_is_open_now(gate_name):
-    gate = GATES.get(gate_name)
-    if not gate:
-        return False
+    # מציאת השער לפי שם
+    gate = next((g for g in GATES if g["name"] == gate_name), None)
+    if gate is None:
+        return False  # לא אמור לקרות, כי כבר בדקנו קודם
 
-    # 24/7
-    if gate.get("hours") == "24/7":
-        return True
+    # get open_hours list
+    hours_list = gate.get("open_hours", [])
+    if not hours_list:
+        return True  # אם אין מגבלות זמן – פתוח תמיד
 
-    try:
-        start, end = gate["hours"].split("-")
-        now = datetime.now().strftime("%H:%M")
-        return start <= now <= end
-    except:
-        return False
+    now = datetime.now().time()
+
+    for rule in hours_list:
+        t_from = datetime.strptime(rule["from"], "%H:%M").time()
+        t_to = datetime.strptime(rule["to"], "%H:%M").time()
+
+        # inclusive range
+        if t_from <= now <= t_to:
+            return True
+
+    return False
 
 
 def device_is_busy():

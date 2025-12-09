@@ -187,6 +187,18 @@ def check_timeout():
 
     return jsonify({"status": "waiting", "remaining": 30 - elapsed}), 200
 
+@app.route("/confirm", methods=["POST"])
+def confirm():
+    data = request.get_json()
+    print("CONFIRM RECEIVED:", data)  # הדפסה ללוג Railway
+
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    status = data.get("status")
+    gate = data.get("gate")
+
+    return jsonify({"received": True, "status": status, "gate": gate}), 200
 
 # -----------------------------
 # RUN LOCAL

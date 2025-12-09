@@ -14,13 +14,17 @@ PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 # Helpers: Load/Save JSON files
 # --------------------------------------
 
-def load_json(name):
-    with open(name, "r") as f:
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_json(filename):
+    path = os.path.join(BASE_DIR, filename)
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_json(name, data):
-    with open(name, "w") as f:
-        json.dump(data, f, indent=2)
+def save_json(filename, data):
+    path = os.path.join(BASE_DIR, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 # --------------------------------------
 # Load database files

@@ -3,19 +3,20 @@
 ===========================================
 
 Author: Yair  
-Version: 1.0  
-Last Update: 2025-12-08  
+Version: 1.1  
+Last Update: 2025-12-09  
 
 -------------------------------------------
  OVERVIEW
 -------------------------------------------
 This project provides a cloud-based gate-opening control system using:
- • Python Flask backend (hosted on Railway)
- • Pushbullet for sending gate-open commands to a local phone
- • Local Android phone + MacroDroid for performing the physical gate opening
- • JSON files for user permissions and gate schedules
+ • Python Flask backend (Railway-hosted)
+ • Pushbullet for sending gate-open commands to a local device
+ • Android phone + MacroDroid for performing the physical gate opening
+ • JSON files for user permissions, gate schedules, and device state
 
-The phone is NOT a logic unit.  
+IMPORTANT:
+The phone is NOT a logic unit.
 It only:
  1) Receives an instruction via Pushbullet
  2) Opens the physical gate
@@ -23,14 +24,17 @@ It only:
 
 All business logic takes place on the SERVER.
 
+
 -------------------------------------------
  FILE STRUCTURE
 -------------------------------------------
-/gates.json      – Gate list, opening hours  
-/users.json      – User list, tokens, allowed gates  
-/app.py          – Server application  
-/README.txt      – This documentation  
-/Dockerfile      – Railway deployment image  
+/gates.json          – Gate list, hours, schedules  
+/users.json          – User list, tokens, allowed gates  
+/device_status.json  – Device busy/pending-session tracking  
+/app.py              – Main server application  
+/README.txt          – This documentation  
+/Dockerfile          – Railway deployment image  
+
 
 -------------------------------------------
  API ENDPOINTS
@@ -38,14 +42,19 @@ All business logic takes place on the SERVER.
 
 1) Health Check  
    GET /
-   Response: {"status":"ok"}
+
+   Response:
+   { "status": "ok" }
+
 
 2) Get Allowed Gates  
-   GET /allowed_gates?token=XXXXXX  
-   Server validates token and returns:  
+   GET /allowed_gates?token=XXXXXX
+
+   Server validates token and returns:
    {
      "allowed": ["Main", "Enter", "Exit"]
    }
+
 
 3) Open Gate  
    POST /open  
@@ -58,18 +67,24 @@ All business logic takes place on the SERVER.
    Server actions:
      • Validate token  
      • Validate gate exists  
-     • Validate user allowed  
+     • Validate user permissions  
      • Validate gate active at this hour  
+     • Validate device is not busy  
      • Create a session ID  
+     • Mark device as busy  
      • Send Pushbullet notification to the phone  
      • Return immediately to client:
-         { "status":"received", "session":"ABC123" }
+         {
+           "status": "received",
+           "session": "ABC123"
+         }
 
-   Client should start polling session:
+   Client must poll:
      GET /status?id=ABC123
 
+
 4) Phone Confirmation (MacroDroid)
-   POST /confirm
+   POST /confirm  
    JSON:
    {
      "session": "ABC123",
@@ -77,87 +92,103 @@ All business logic takes place on the SERVER.
      "status": "opened"   (or "failed")
    }
 
-   Server stores result:
-     session: opened/failed
+   Server actions:
+     • Match session  
+     • Update session state  
+     • Mark device not busy  
+     • Store result
 
-5) Client Poll
+
+5) Client Session Poll  
    GET /status?id=ABC123
 
-   Possible answers:
-     { "status":"pending" }
-     { "status":"opened" }
-     { "status":"failed", "reason":"no response from device" }
+   Possible responses:
+     { "status": "pending" }
+     { "status": "opened" }
+     { "status": "failed", "reason": "device_error" }
+     { "status": "failed", "reason": "device_timeout" }
+
 
 -------------------------------------------
  GATE SCHEDULE LOGIC
 -------------------------------------------
-If gate has no schedule → open 24/7  
-If gate has schedule (e.g. 05:20–21:00):
-   Server checks current time before allowing the request.
+If a gate has no schedule → open 24/7.
+
+If gate has schedule (example: 05:20–21:00):
+The server checks current time before allowing the request.  
+If outside valid hours → request rejected.
+
 
 -------------------------------------------
  USER PERMISSION LOGIC
 -------------------------------------------
-Each user has:
- • name
- • token (6-digit numeric)
+Each user entry contains:
+ • name  
+ • token (6-digit numeric)  
  • allowed_gates (list)
 
-Example user:
+Example:
 {
   "name": "Miki",
   "token": "184029",
-  "allowed": ["Main","Enter","Exit","Gay"]
+  "allowed": ["Main", "Enter", "Exit", "Gay"]
 }
+
 
 -------------------------------------------
  SESSION HANDLING
 -------------------------------------------
 When a client requests to open a gate:
- • Server creates a session with state "pending"
- • Sends instruction to phone via Pushbullet
- • Starts a 30-second timer
- • If phone does not confirm → session becomes "failed"
+
+ • Server creates a session with state = "pending"  
+ • Sends instruction to the phone  
+ • Starts a 30-second timeout countdown  
+ • If phone does not respond:
+      session becomes "failed" with reason "device_timeout"
+      device marked not busy
+
 
 -------------------------------------------
  PHONE LOGIC (MACRODROID)
 -------------------------------------------
-Phone receives Pushbullet note with content:
+Phone receives Pushbullet note containing:
    gate=Main;device=xxxx
 
 Phone must:
- • Parse gate name
- • Execute gate open command (local hardware)
- • Immediately POST back to server:
-     /confirm
-     payload: {"session":"XYZ","gate":"Main","status":"opened"}
+ 1) Parse gate name  
+ 2) Trigger local mechanism to open gate  
+ 3) POST back to server:
+
+POST /confirm  
+Payload:
+{
+  "session": "XYZ",
+  "gate": "Main",
+  "status": "opened"   // or failed
+}
+
+Phone does NOT wait for server response.  
+Phone does NOT send unsolicited requests.  
+
 
 -------------------------------------------
  FAILURE MODES
 -------------------------------------------
-1) User not authorized → server returns 403  
-2) Gate outside hours → server returns 403  
-3) Pushbullet error → server returns 500  
-4) Phone not responding → session=failed after 30 seconds  
-5) Invalid token → server returns 401  
-
--------------------------------------------
- FUTURE IMPROVEMENTS
--------------------------------------------
- • Add rate limiting  
- • Add logging (optional)  
- • Add admin dashboard  
- • Switch JSON → SQLite/MySQL  
- • Add JWT tokens  
+1) User not authorized → 403  
+2) Gate outside hours → 403  
+3) Invalid token → 401  
+4) Pushbullet delivery error → 500  
+5) Device busy → 409 ("device is busy")  
+6) Phone does not respond → "device_timeout"  
+7) Gate or data missing → 400  
 
 
 -------------------------------------------
  DEVICE EXECUTION LIMITATION
 -------------------------------------------
-The Android device can handle ONLY ONE gate-opening
-operation at a time.
+The Android device can handle ONLY ONE operation at a time.
 
-The server enforces this by using device_status.json:
+Tracking is done inside device_status.json:
 
 {
   "busy": false,
@@ -165,11 +196,27 @@ The server enforces this by using device_status.json:
 }
 
 Rules:
-• When a gate request is accepted, server sets busy=true.
-• No new requests are allowed while busy=true.
-• When the phone reports back (/confirm), busy=false.
-• If the phone does not respond within 30 seconds:
-     busy=false and session marked as "timeout".
+ • When a new request is accepted → busy=true  
+ • No new requests allowed while busy=true  
+ • When phone sends /confirm → busy=false  
+ • If phone does not respond within 30 seconds:
+      busy=false  
+      session marked "timeout"
 
-This ensures the phone never receives overlapping commands
-and guarantees consistent system behavior.
+This guarantees:
+ • No overlapping commands  
+ • Predictable behavior  
+ • Reliable system flow  
+
+
+-------------------------------------------
+ FUTURE IMPROVEMENTS
+-------------------------------------------
+ • Move JSON files into SQLite or MySQL  
+ • Add encryption or signatures for MacroDroid payloads  
+ • Add admin dashboard  
+ • Add logging & monitoring  
+ • Add support for multiple devices  
+ • Queue system for redundant commands  
+ • Add JWT-based authentication  
+

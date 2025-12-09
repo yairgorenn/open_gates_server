@@ -130,9 +130,9 @@ def open_gate():
     data = request.get_json()
 
     token = data.get("token")
-    gate = data.get("gate")
+    gate_name = data.get("gate")
 
-    if not token or not gate:
+    if not token or not gate_name:
         return jsonify({"error": "token and gate required"}), 400
 
     # Validate token
@@ -140,16 +140,22 @@ def open_gate():
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
-    # Validate gate exists
-    if gate not in GATES:
-        return jsonify({"error": "unknown gate"}), 400
+    # Extract allowed list
+    allowed = user.get("allowed_gates")
+    if isinstance(allowed, str) and allowed.upper() == "ALL":
+        allowed = [g["name"] for g in GATES]
 
     # Validate permissions
-    if gate not in user["allowed"]:
+    if gate_name not in allowed:
         return jsonify({"error": "not allowed"}), 403
 
+    # Validate gate exists
+    gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
+    if gate_obj is None:
+        return jsonify({"error": "unknown gate"}), 400
+
     # Validate gate is open now
-    if not gate_is_open_now(gate):
+    if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed now"}), 403
 
     # Check if device busy
@@ -159,7 +165,7 @@ def open_gate():
     # Create session
     session_id = uuid.uuid4().hex[:12]
     SESSIONS[session_id] = {
-        "gate": gate,
+        "gate": gate_name,
         "status": "pending",
         "created": time.time()
     }
@@ -171,7 +177,7 @@ def open_gate():
     pb_payload = {
         "type": "note",
         "title": "Open Gate",
-        "body": f"gate={gate};session={session_id}"
+        "body": f"gate={gate_name};session={session_id}"
     }
 
     headers = {
@@ -193,7 +199,6 @@ def open_gate():
         SESSIONS[session_id]["reason"] = "pushbullet_error"
         return jsonify({"error": "pushbullet failure"}), 500
 
-    # Immediate response to client
     return jsonify({"status": "received", "session": session_id})
 
 

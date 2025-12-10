@@ -2,22 +2,16 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import json
-import uuid
 import time
 from datetime import datetime
 
 app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
-LAST_STATUS = {
-    "gate": None,
-    "status": None,
-    "time": None
-}
 
-# --------------------------------------
-# Helpers: Load/Save JSON files
-# --------------------------------------
+# ============================================================
+# Helpers to load/save JSON (Users + Gates)
+# ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,77 +25,79 @@ def save_json(filename, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# --------------------------------------
-# Load database files
-# --------------------------------------
-
-USERS = load_json("users.json")
+# Load static data
+USERS = load_json("users.json")["users"]
 GATES = load_json("gates.json")
-DEVICE = load_json("device_status.json")
 
-# session store in RAM (Railway ephemeral)
-SESSIONS = {}
+# ============================================================
+# Device State – in memory only
+# ============================================================
+
+DEVICE_BUSY = False
+DEVICE_LAST_GATE = None
+DEVICE_TIMESTAMP = 0
 
 
-# ======================================
-# BASIC ROUTES
-# ======================================
+def device_is_busy():
+    return DEVICE_BUSY
+
+
+def set_device_busy(gate_name):
+    global DEVICE_BUSY, DEVICE_LAST_GATE, DEVICE_TIMESTAMP
+    DEVICE_BUSY = True
+    DEVICE_LAST_GATE = gate_name
+    DEVICE_TIMESTAMP = time.time()
+
+
+def set_device_free():
+    global DEVICE_BUSY, DEVICE_LAST_GATE
+    DEVICE_BUSY = False
+    DEVICE_LAST_GATE = None
+
+
+# ============================================================
+# Basic route
+# ============================================================
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok"}), 200
 
 
-# ======================================
-# GET ALLOWED GATES
-# ======================================
+# ============================================================
+# Return allowed gates for a user
+# ============================================================
 
 @app.route("/allowed_gates", methods=["GET"])
 def allowed_gates():
     token = request.args.get("token")
-
-    # אין טוקן
     if not token:
         return jsonify({"error": "token required"}), 400
 
-    # חיפוש המשתמש
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
     allowed = user.get("allowed_gates")
 
-    # ---------- ALL ----------
-    # אם כתוב ALL – המשתמש יכול לפתוח את כל השערים
     if isinstance(allowed, str) and allowed.upper() == "ALL":
-        try:
-            all_gate_names = [g["name"] for g in GATES]
-        except Exception as e:
-            return jsonify({"error": f"gates.json invalid: {str(e)}"}), 500
-        return jsonify({"allowed": all_gate_names}), 200
+        return jsonify({"allowed": [g["name"] for g in GATES]}), 200
 
-    # ---------- רשימת שערים ספציפית ----------
-    if isinstance(allowed, list):
-        return jsonify({"allowed": allowed}), 200
-
-    # ---------- פורמט לא תקין ----------
-    return jsonify({"error": "invalid user permissions format"}), 500
+    return jsonify({"allowed": allowed}), 200
 
 
-# ======================================
-# VALIDATION FUNCTIONS
-# ======================================
+# ============================================================
+# Validate gate hours
+# ============================================================
 
 def gate_is_open_now(gate_name):
-    # מציאת השער לפי שם
     gate = next((g for g in GATES if g["name"] == gate_name), None)
-    if gate is None:
-        return False  # לא אמור לקרות, כי כבר בדקנו קודם
+    if not gate:
+        return False
 
-    # get open_hours list
     hours_list = gate.get("open_hours", [])
     if not hours_list:
-        return True  # אם אין מגבלות זמן – פתוח תמיד
+        return True  # always open
 
     now = datetime.now().time()
 
@@ -109,50 +105,33 @@ def gate_is_open_now(gate_name):
         t_from = datetime.strptime(rule["from"], "%H:%M").time()
         t_to = datetime.strptime(rule["to"], "%H:%M").time()
 
-        # inclusive range
         if t_from <= now <= t_to:
             return True
 
     return False
 
 
-def device_is_busy():
-    return DEVICE.get("busy", False)
-
-
-def set_device_busy(session_id):
-    DEVICE["busy"] = True
-    DEVICE["session"] = session_id
-    DEVICE["timestamp"] = time.time()
-    save_json("device_status.json", DEVICE)
-
-
-def set_device_free():
-    DEVICE["busy"] = False
-    DEVICE["session"] = None
-    save_json("device_status.json", DEVICE)
-
-
-# ======================================
-# OPEN GATE (CLIENT → SERVER)
-# ======================================
+# ============================================================
+# /open – client wants to open a gate
+# ============================================================
 
 @app.route("/open", methods=["POST"])
 def open_gate():
-    data = request.get_json()
+    global DEVICE_BUSY
 
+    data = request.get_json()
     token = data.get("token")
     gate_name = data.get("gate")
 
     if not token or not gate_name:
         return jsonify({"error": "token and gate required"}), 400
 
-    # Validate token
+    # Validate user
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
-    # Allowed list
+    # Validate allowed gates
     allowed = user.get("allowed_gates")
     if isinstance(allowed, str) and allowed.upper() == "ALL":
         allowed = [g["name"] for g in GATES]
@@ -160,28 +139,23 @@ def open_gate():
     if gate_name not in allowed:
         return jsonify({"error": "not allowed"}), 403
 
-    # Gate exists?
+    # Validate gate exists
     gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
     if gate_obj is None:
         return jsonify({"error": "unknown gate"}), 400
 
-    # Time rule
+    # Validate time window
     if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed now"}), 403
 
-    # Device busy?
+    # Check device availability
     if device_is_busy():
         return jsonify({"error": "device busy"}), 409
 
-    # Lock device
-    set_device_busy("active")
+    # Mark device busy
+    set_device_busy(gate_name)
 
-    # Reset LAST_STATUS
-    LAST_STATUS["gate"] = gate_name
-    LAST_STATUS["status"] = "pending"
-    LAST_STATUS["time"] = time.time()
-
-    # Prepare Pushbullet
+    # Prepare push message
     pb_payload = {
         "type": "note",
         "title": "Open Gate",
@@ -193,6 +167,7 @@ def open_gate():
         "Content-Type": "application/json"
     }
 
+    # Send to Pushbullet
     pb_response = requests.post(
         "https://api.pushbullet.com/v2/pushes",
         json=pb_payload,
@@ -202,58 +177,52 @@ def open_gate():
 
     if pb_response.status_code != 200:
         set_device_free()
-        LAST_STATUS["status"] = "failed"
-        LAST_STATUS["time"] = time.time()
         return jsonify({"error": "pushbullet failure"}), 500
 
-    return jsonify({"status": "received"})
+    # Return immediate acknowledgment
+    return jsonify({"status": "received"}), 200
 
 
-# ======================================
-# PHONE CONFIRMATION (/confirm)
-# ======================================
+# ============================================================
+# /confirm – phone reports success/failure
+# ============================================================
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
     data = request.get_json()
 
-    gate = data.get("gate")
     status = data.get("status")
+    gate = data.get("gate")
 
-    if not gate or not status:
-        return jsonify({"error": "gate and status required"}), 400
+    if not status or not gate:
+        return jsonify({"error": "invalid payload"}), 400
 
-    # Update LAST_STATUS
-    LAST_STATUS["gate"] = gate
-    LAST_STATUS["status"] = status
-    LAST_STATUS["time"] = time.time()
-
-    # Free device
+    # Release device immediately
     set_device_free()
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "received": {"gate": gate, "status": status}}), 200
 
 
-# ======================================
-# SESSION STATUS POLL
-# ======================================
+# ============================================================
+# /status – only checks whether device is busy or free
+# ============================================================
 
 @app.route("/status", methods=["GET"])
 def status():
-    # אם עדיין בהמתנה
-    if LAST_STATUS["status"] == "pending":
-        # Timeout after 30 seconds
-        if time.time() - LAST_STATUS["time"] > 30:
-            LAST_STATUS["status"] = "failed"
-            LAST_STATUS["time"] = time.time()
+    if DEVICE_BUSY:
+        # if stuck for > 30 seconds → force reset
+        if time.time() - DEVICE_TIMESTAMP > 30:
             set_device_free()
+            return jsonify({"status": "failed", "reason": "device_timeout"}), 200
 
-    return jsonify(LAST_STATUS)
+        return jsonify({"status": "pending"}), 200
+
+    return jsonify({"status": "ready"}), 200
 
 
-# ======================================
-# MAIN (for local dev)
-# ======================================
+# ============================================================
+# Run locally
+# ============================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))

@@ -16,6 +16,8 @@ PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 DEVICE_BUSY = False
 DEVICE_LAST_GATE = None
 DEVICE_TIMESTAMP = 0
+LAST_RESULT = None
+
 
 def log(msg):
     print(f"[SERVER LOG] {datetime.now().strftime('%H:%M:%S')} - {msg}", flush=True)
@@ -177,18 +179,29 @@ def open_gate():
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
-    data = request.get_json()
-    log(f"/confirm received payload: {data}")
+    global LAST_RESULT
 
+    data = request.get_json()
     status = data.get("status")
     gate = data.get("gate")
 
     if not status or not gate:
-        log("Invalid confirm payload")
         return jsonify({"error": "invalid payload"}), 400
 
+    # Convert phone status → server status
+    if status.lower() == "success":
+        server_status = "opened"
+    else:
+        server_status = "failed"
+
+    # Save final result so client can read it
+    LAST_RESULT = {
+        "status": server_status,
+        "gate": gate
+    }
+
+    # Free device
     set_device_free()
-    log(f"Confirm OK → device free. status={status}, gate={gate}")
 
     return jsonify({"ok": True}), 200
 
@@ -199,20 +212,23 @@ def confirm():
 
 @app.route("/status", methods=["GET"])
 def status():
-    global DEVICE_BUSY, DEVICE_TIMESTAMP
+    global LAST_RESULT, DEVICE_TIMESTAMP
 
+    # If phone already reported success/fail → return it once
+    if LAST_RESULT is not None:
+        result = LAST_RESULT
+        LAST_RESULT = None   # erase after read
+        return jsonify(result), 200
+
+    # Device still processing
     if DEVICE_BUSY:
         age = time.time() - DEVICE_TIMESTAMP
-        log(f"/status → BUSY (age {age:.1f}s)")
-
         if age > 30:
-            log("Timeout reached → resetting device")
             set_device_free()
-            return jsonify({"status": "failed", "reason": "device_timeout"}), 200
-
+            return jsonify({"status": "failed"}), 200
         return jsonify({"status": "pending"}), 200
 
-    log("/status → READY")
+    # Nothing happening
     return jsonify({"status": "ready"}), 200
 
 

@@ -9,6 +9,11 @@ from datetime import datetime
 app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
+LAST_STATUS = {
+    "gate": None,
+    "status": None,
+    "time": None
+}
 
 # --------------------------------------
 # Helpers: Load/Save JSON files
@@ -147,44 +152,40 @@ def open_gate():
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
-    # Extract allowed list
+    # Allowed list
     allowed = user.get("allowed_gates")
     if isinstance(allowed, str) and allowed.upper() == "ALL":
         allowed = [g["name"] for g in GATES]
 
-    # Validate permissions
     if gate_name not in allowed:
         return jsonify({"error": "not allowed"}), 403
 
-    # Validate gate exists
+    # Gate exists?
     gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
     if gate_obj is None:
         return jsonify({"error": "unknown gate"}), 400
 
-    # Validate gate is open now
+    # Time rule
     if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed now"}), 403
 
-    # Check if device busy
+    # Device busy?
     if device_is_busy():
         return jsonify({"error": "device busy"}), 409
 
-    # Create session
-    session_id = uuid.uuid4().hex[:12]
-    SESSIONS[session_id] = {
-        "gate": gate_name,
-        "status": "pending",
-        "created": time.time()
-    }
-
     # Lock device
-    set_device_busy(session_id)
+    set_device_busy("active")
 
-    # Prepare Pushbullet payload
+    # Reset LAST_STATUS
+    LAST_STATUS["gate"] = gate_name
+    LAST_STATUS["status"] = "pending"
+    LAST_STATUS["time"] = time.time()
+
+    # Prepare Pushbullet
     pb_payload = {
         "type": "note",
         "title": "Open Gate",
-        "body": f"gate={gate_name};session={session_id}"
+        "body": f"gate={gate_name}"
     }
 
     headers = {
@@ -192,7 +193,6 @@ def open_gate():
         "Content-Type": "application/json"
     }
 
-    # Send Pushbullet command
     pb_response = requests.post(
         "https://api.pushbullet.com/v2/pushes",
         json=pb_payload,
@@ -202,11 +202,11 @@ def open_gate():
 
     if pb_response.status_code != 200:
         set_device_free()
-        SESSIONS[session_id]["status"] = "failed"
-        SESSIONS[session_id]["reason"] = "pushbullet_error"
+        LAST_STATUS["status"] = "failed"
+        LAST_STATUS["time"] = time.time()
         return jsonify({"error": "pushbullet failure"}), 500
 
-    return jsonify({"status": "received", "session": session_id})
+    return jsonify({"status": "received"})
 
 
 # ======================================
@@ -217,21 +217,18 @@ def open_gate():
 def confirm():
     data = request.get_json()
 
-    session_id = data.get("session")
-    status = data.get("status")
     gate = data.get("gate")
+    status = data.get("status")
 
-    if not session_id or not status or not gate:
-        return jsonify({"error": "invalid payload"}), 400
+    if not gate or not status:
+        return jsonify({"error": "gate and status required"}), 400
 
-    if session_id not in SESSIONS:
-        return jsonify({"error": "unknown session"}), 400
+    # Update LAST_STATUS
+    LAST_STATUS["gate"] = gate
+    LAST_STATUS["status"] = status
+    LAST_STATUS["time"] = time.time()
 
-    # Update session state
-    SESSIONS[session_id]["status"] = status
-    SESSIONS[session_id]["completed"] = time.time()
-
-    # Release device
+    # Free device
     set_device_free()
 
     return jsonify({"ok": True})
@@ -243,23 +240,15 @@ def confirm():
 
 @app.route("/status", methods=["GET"])
 def status():
-    session_id = request.args.get("id")
-    if not session_id:
-        return jsonify({"error": "missing id"}), 400
-
-    if session_id not in SESSIONS:
-        return jsonify({"error": "unknown session"}), 400
-
-    session = SESSIONS[session_id]
-
-    # Timeout check (30 seconds)
-    if session["status"] == "pending":
-        if time.time() - session["created"] > 30:
-            session["status"] = "failed"
-            session["reason"] = "device_timeout"
+    # אם עדיין בהמתנה
+    if LAST_STATUS["status"] == "pending":
+        # Timeout after 30 seconds
+        if time.time() - LAST_STATUS["time"] > 30:
+            LAST_STATUS["status"] = "failed"
+            LAST_STATUS["time"] = time.time()
             set_device_free()
 
-    return jsonify(session)
+    return jsonify(LAST_STATUS)
 
 
 # ======================================

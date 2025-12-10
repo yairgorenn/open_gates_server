@@ -54,6 +54,7 @@ USERS = [
     {"name": "Raz", "token": "650391", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
     {"name": "Nofar", "token": "902574", "allowed_gates": "ALL"},
     {"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
+    {"name": "Tomer", "token": "319702", "allowed_gates": "ALL"},
     {"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
 ]
 

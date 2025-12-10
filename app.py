@@ -13,10 +13,6 @@ PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-# Load static data
-USERS = load_json("users.json")["users"]
-GATES = load_json("gates.json")
-
 # ============================================================
 # Device State – in memory only
 # ============================================================

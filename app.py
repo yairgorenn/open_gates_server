@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import json
 import time
 from datetime import datetime
 
@@ -9,9 +8,53 @@ app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 
+# ============================================================
+# USERS – in memory
+# ============================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USERS = [
+    {
+        "name": "Yair",
+        "token": "482913",
+        "allowed_gates": "ALL"
+    },
+    {
+        "name": "Miki",
+        "token": "MIKI1948",
+        "allowed_gates": ["Main", "Enter", "Exit"]
+    }
+]
 
+# ============================================================
+# GATES – in memory
+# ============================================================
+
+GATES = [
+    {
+        "name": "Main",
+        "open_hours": [{"from": "00:00", "to": "23:59"}]
+    },
+    {
+        "name": "Gay",
+        "open_hours": [{"from": "00:00", "to": "23:59"}]
+    },
+    {
+        "name": "Enter",
+        "open_hours": [{"from": "05:20", "to": "21:00"}]
+    },
+    {
+        "name": "Exit",
+        "open_hours": [{"from": "05:20", "to": "21:00"}]
+    },
+    {
+        "name": "EinCarmel",
+        "open_hours": [{"from": "00:00", "to": "23:59"}]
+    },
+    {
+        "name": "Almagor",
+        "open_hours": [{"from": "00:00", "to": "23:59"}]
+    }
+]
 
 # ============================================================
 # Device State – in memory only
@@ -163,7 +206,6 @@ def open_gate():
         set_device_free()
         return jsonify({"error": "pushbullet failure"}), 500
 
-    # Return immediate acknowledgment
     return jsonify({"status": "received"}), 200
 
 
@@ -181,7 +223,7 @@ def confirm():
     if not status or not gate:
         return jsonify({"error": "invalid payload"}), 400
 
-    # Release device immediately
+    # Device becomes free
     set_device_free()
 
     return jsonify({"ok": True, "received": {"gate": gate, "status": status}}), 200
@@ -194,7 +236,7 @@ def confirm():
 @app.route("/status", methods=["GET"])
 def status():
     if DEVICE_BUSY:
-        # if stuck for > 30 seconds → force reset
+        # timeout protection
         if time.time() - DEVICE_TIMESTAMP > 30:
             set_device_free()
             return jsonify({"status": "failed", "reason": "device_timeout"}), 200

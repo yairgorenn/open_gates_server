@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import json
 import time
 from datetime import datetime
 
@@ -9,34 +8,40 @@ app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 
+
 # ============================================================
 # Internal in-memory state
 # ============================================================
 
-DEVICE_BUSY = False
-DEVICE_LAST_GATE = None
-DEVICE_TIMESTAMP = 0
-LAST_RESULT = None
+DEVICE_BUSY = False        # האם הטלפון כרגע מבצע פעולה
+DEVICE_LAST_GATE = None    # איזה שער נפתח כעת
+DEVICE_TIMESTAMP = 0       # זמן תחילת הפעולה
+LAST_RESULT = None         # תוצאה שהטלפון שלח (opened/failed)
 
 
 def log(msg):
+    """Utility printing function (currently unused)."""
     print(f"[SERVER LOG] {datetime.now().strftime('%H:%M:%S')} - {msg}", flush=True)
 
+
 def device_is_busy():
+    """Return True if the device is locked performing a gate action."""
     return DEVICE_BUSY
 
+
 def set_device_busy(gate_name):
+    """Mark device as BUSY and store timestamp."""
     global DEVICE_BUSY, DEVICE_LAST_GATE, DEVICE_TIMESTAMP
     DEVICE_BUSY = True
     DEVICE_LAST_GATE = gate_name
     DEVICE_TIMESTAMP = time.time()
-    log(f"Device marked BUSY for gate '{gate_name}'")
+
 
 def set_device_free():
+    """Release device lock and clear last gate."""
     global DEVICE_BUSY, DEVICE_LAST_GATE
     DEVICE_BUSY = False
     DEVICE_LAST_GATE = None
-    log("Device marked FREE")
 
 
 # ============================================================
@@ -63,45 +68,40 @@ GATES = [
 
 
 # ============================================================
-# Allowed gates
+# Allowed gates endpoint
 # ============================================================
 
 @app.route("/allowed_gates", methods=["GET"])
 def allowed_gates():
+    """Return list of gates the user is allowed to open."""
     token = request.args.get("token")
-    log(f"/allowed_gates called with token={token}")
-
     if not token:
         return jsonify({"error": "token required"}), 400
 
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
-        log("Invalid token")
         return jsonify({"error": "invalid token"}), 401
 
     allowed = user["allowed_gates"]
     if allowed == "ALL":
-        result = [g["name"] for g in GATES]
-        log(f"Returning ALL gates: {result}")
-        return jsonify({"allowed": result}), 200
+        return jsonify({"allowed": [g["name"] for g in GATES]}), 200
 
-    log(f"Returning allowed gates: {allowed}")
     return jsonify({"allowed": allowed}), 200
 
 
 # ============================================================
-# Validate gate time
+# Gate time validation
 # ============================================================
 
 def gate_is_open_now(gate_name):
+    """Return True if current time falls inside gate's allowed hours."""
     gate = next((g for g in GATES if g["name"] == gate_name), None)
     if not gate:
         return False
 
     now = datetime.now().time()
-    hours_list = gate["open_hours"]
 
-    for rule in hours_list:
+    for rule in gate["open_hours"]:
         t_from = datetime.strptime(rule["from"], "%H:%M").time()
         t_to = datetime.strptime(rule["to"], "%H:%M").time()
         if t_from <= now <= t_to:
@@ -111,26 +111,23 @@ def gate_is_open_now(gate_name):
 
 
 # ============================================================
-# OPEN request
+# open gate
 # ============================================================
 
 @app.route("/open", methods=["POST"])
 def open_gate():
+    """Validate user → check gate → lock device → send Pushbullet."""
     global DEVICE_BUSY
 
     data = request.get_json()
-    log(f"/open received payload: {data}")
-
     token = data.get("token")
     gate_name = data.get("gate")
 
     if not token or not gate_name:
-        log("Missing token or gate")
         return jsonify({"error": "token and gate required"}), 400
 
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
-        log("Invalid token")
         return jsonify({"error": "invalid token"}), 401
 
     allowed = user["allowed_gates"]
@@ -138,23 +135,19 @@ def open_gate():
         allowed = [g["name"] for g in GATES]
 
     if gate_name not in allowed:
-        log(f"Gate '{gate_name}' not allowed for user")
         return jsonify({"error": "not allowed"}), 403
 
     if not gate_is_open_now(gate_name):
-        log(f"Gate '{gate_name}' is currently closed")
         return jsonify({"error": "gate closed now"}), 403
 
     if device_is_busy():
-        log("Device is busy")
         return jsonify({"error": "device busy"}), 409
 
-    # Mark busy
+    # Lock device
     set_device_busy(gate_name)
 
-    # Push to phone
+    # Send Pushbullet
     pb_body = f"gate={gate_name}"
-    log(f"Sending Pushbullet: {pb_body}")
 
     pb_res = requests.post(
         "https://api.pushbullet.com/v2/pushes",
@@ -163,10 +156,7 @@ def open_gate():
         timeout=5
     )
 
-    log(f"Pushbullet response: {pb_res.status_code}")
-
     if pb_res.status_code != 200:
-        log("Pushbullet failed → freeing device")
         set_device_free()
         return jsonify({"error": "pushbullet failure"}), 500
 
@@ -174,11 +164,12 @@ def open_gate():
 
 
 # ============================================================
-# CONFIRM from phone
+# confirm
 # ============================================================
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
+    """Called by phone. Save result and release device."""
     global LAST_RESULT
 
     data = request.get_json()
@@ -188,39 +179,32 @@ def confirm():
     if not status or not gate:
         return jsonify({"error": "invalid payload"}), 400
 
-    # Convert phone status → server status
-    if status.lower() == "success":
-        server_status = "opened"
-    else:
-        server_status = "failed"
-
-    # Save final result so client can read it
+    # Map phone result → API result
     LAST_RESULT = {
-        "status": server_status,
+        "status": "opened" if status.lower() == "success" else "failed",
         "gate": gate
     }
 
-    # Free device
     set_device_free()
 
     return jsonify({"ok": True}), 200
 
 
 # ============================================================
-# STATUS
+# status
 # ============================================================
 
 @app.route("/status", methods=["GET"])
 def status():
+    """Return pending/opened/failed or ready."""
     global LAST_RESULT, DEVICE_TIMESTAMP
 
-    # If phone already reported success/fail → return it once
+    # Return final result once
     if LAST_RESULT is not None:
         result = LAST_RESULT
-        LAST_RESULT = None   # erase after read
+        LAST_RESULT = None
         return jsonify(result), 200
 
-    # Device still processing
     if DEVICE_BUSY:
         age = time.time() - DEVICE_TIMESTAMP
         if age > 30:
@@ -228,12 +212,11 @@ def status():
             return jsonify({"status": "failed"}), 200
         return jsonify({"status": "pending"}), 200
 
-    # Nothing happening
     return jsonify({"status": "ready"}), 200
 
 
 # ============================================================
-# Run local
+# Local server run
 # ============================================================
 
 if __name__ == "__main__":

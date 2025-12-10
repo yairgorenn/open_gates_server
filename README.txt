@@ -1,22 +1,26 @@
-===========================================================
- README — OpenGate Cloud System (Version 2.0, English)
-===========================================================
+============================================================
+ README — OpenGate Cloud System (Version 2.1, English)
+============================================================
 
 OVERVIEW
 --------
-A cloud-based gate-opening system consisting of:
+A lightweight cloud-based gate-opening system consisting of:
+
 • Python Flask server hosted on Railway  
-• Pushbullet for sending gate-open commands to a phone  
-• Android phone + MacroDroid performing ONLY the physical action  
-• All business logic runs on the server  
-• No JSON files, no session IDs, no polling
+• Pushbullet for delivering gate-open commands to a phone  
+• Android phone + MacroDroid acting ONLY as a hardware trigger  
+• All decision-making and permissions handled by the server  
+• No JSON storage, no session IDs, no polling loops on the server  
 
 The phone is a **dumb endpoint**:
-1. Receives a Pushbullet note containing the gate name  
-2. Activates a relay / app to open the gate  
-3. Reports back to the server using /confirm with only:  
+1. Receives a Pushbullet note with the gate name  
+2. Executes the physical opening  
+3. Reports back using `/confirm` with:
    - gate name  
    - status (“success” / “failed”)
+
+All state is held **in memory** on the server.
+
 
 FILE STRUCTURE
 ---------------
@@ -24,19 +28,25 @@ FILE STRUCTURE
 /README.txt   — documentation  
 /Dockerfile   — Railway deployment setup  
 
-Gate/user data is defined **inside app.py** (not in external files).
+Gate and user definitions are embedded **inside app.py**.
+
 
 DATA STRUCTURE (inside app.py)
 ------------------------------
+### Users:
+```python
 USERS = [
-    {"name": "Yair", "token": "482913", "allowed": "ALL"},
-    {"name": "Miki", "token": "173025", "allowed": ["Main","Enter","Exit","Gay"]},
-    {"name": "Raz",  "token": "650391", "allowed": ["Main","Enter","Exit","Gay"]},
-    {"name": "Nofar","token": "902574", "allowed": "ALL"},
-    {"name": "Liat", "token": "315760", "allowed": "ALL"},
-    {"name": "Alon", "token": "768204", "allowed": "ALL"}
+    {"name": "Yair", "token": "482913", "allowed_gates": "ALL"},
+    {"name": "Miki", "token": "173025", "allowed_gates": ["Main","Enter","Exit","Gay"]},
+    {"name": "Raz",  "token": "650391", "allowed_gates": ["Main","Enter","Exit","Gay"]},
+    {"name": "Nofar","token": "902574", "allowed_gates": "ALL"},
+    {"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
+    {"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
 ]
+```
 
+### Gates:
+```python
 GATES = {
     "Main":      {"hours": ("00:00", "23:59")},
     "Gay":       {"hours": ("00:00", "23:59")},
@@ -45,145 +55,182 @@ GATES = {
     "EinCarmel": {"hours": ("00:00", "23:59")},
     "Almagor":   {"hours": ("00:00", "23:59")}
 }
+```
 
-# Global device lock
+### Global device state:
+```python
 DEVICE_BUSY = False
+LAST_GATE = None
+LAST_STATUS = None   # NEW — stores "opened", "failed", or None
+DEVICE_TIMESTAMP = 0
+```
 
 
-
-===========================================================
+============================================================
  API ENDPOINTS
-===========================================================
+============================================================
 
 1) HEALTH CHECK
 ---------------
 GET /
+
 Response:
+```json
 { "status": "ok" }
+```
 
 
 2) GET ALLOWED GATES
 --------------------
 GET /allowed_gates?token=XXXXX
 
-If user has allowed="ALL", all gates are returned.
+If user has `"allowed_gates": "ALL"`, the server returns all gates.
 
 Response example:
+```json
 {
   "allowed": ["Main","Enter","Exit","Gay","EinCarmel","Almagor"]
 }
+```
 
 
 3) OPEN GATE (client → server → phone)
 --------------------------------------
 POST /open  
 Body:
+```json
 {
   "token": "XXXXXX",
   "gate": "Main"
 }
+```
 
 Server flow:
 ✓ Validate token  
 ✓ Validate permissions  
 ✓ Validate gate exists  
 ✓ Validate time window  
-✓ Validate DEVICE_BUSY == False  
-✓ Set DEVICE_BUSY = True  
+✓ Ensure device is NOT busy  
+✓ Mark device busy  
+✓ Save LAST_GATE  
+✓ Clear LAST_STATUS  
 ✓ Send Pushbullet message to the phone  
 
 Response:
+```json
 { "status": "sent" }
+```
 
 
 4) PHONE CONFIRMATION
 ---------------------
 POST /confirm  
 Body:
+```json
 {
   "gate": "Main",
-  "status": "success"   // or "failed"
+  "status": "success"
 }
+```
 
-Server:
-✓ Releases lock → DEVICE_BUSY = False  
+Server behavior:
+✓ Saves LAST_STATUS (“opened” or “failed”)  
+✓ Releases device lock  
 ✓ Returns:
-
+```json
 { "ok": true }
+```
 
 
+5) CLIENT STATUS CHECK (new simplified model)
+---------------------------------------------
+GET /status
 
-===========================================================
- DEVICE BUSY LOGIC
-===========================================================
+Server responses:
+```json
+{ "status": "pending" }       // device busy
+{ "status": "opened", "gate": "Main" }
+{ "status": "failed", "gate": "Main" }
+{ "status": "ready" }         // idle and no result waiting
+```
 
-The Android device can open only ONE gate at a time.
-
-Rules:
-• Before sending a command, server checks DEVICE_BUSY  
-• If busy → /open returns 409 (device busy)  
-• When phone sends /confirm → DEVICE_BUSY = False  
-
-Process:
-1. Client calls /open  
-2. Server sets DEVICE_BUSY = True  
-3. Phone opens gate  
-4. Phone sends /confirm  
-5. Server sets DEVICE_BUSY = False  
-
-No session IDs, no polling, no storage of state.
+Right after the client consumes “opened”/“failed”,  
+the server resets `LAST_STATUS = None`.
 
 
+============================================================
+ DEVICE BUSY & RESULT LOGIC
+============================================================
 
-===========================================================
+The Android device can open only **one gate at a time**.
+
+Server rules:
+• Before /open: check `DEVICE_BUSY`  
+• During operation: `DEVICE_BUSY = True`  
+• When phone calls /confirm → `DEVICE_BUSY = False`  
+• The open-result is stored in `LAST_STATUS`  
+• Client reads it using /status  
+• After client reads → server clears the result  
+
+This ensures:
+✓ No race conditions  
+✓ No memory leaks  
+✓ No session IDs needed  
+✓ Works with one device reliably  
+
+
+============================================================
  ERROR CODES
-===========================================================
+============================================================
 
-400 — Bad request  
+400 — Missing fields  
 401 — Invalid token  
-403 — Not allowed / Gate closed based on schedule  
+403 — Not allowed / Gate closed  
 409 — Device busy  
-500 — Pushbullet or internal error  
+500 — Pushbullet failure or internal error  
 
 
+============================================================
+ MACRODROID LOGIC (PHONE SIDE)
+============================================================
 
-===========================================================
- MACRODROID WORKFLOW (PHONE LOGIC)
-===========================================================
-
-Pushbullet sends a notification like:
+Pushbullet sends the body:
+```
 gate=Main
+```
 
-Phone:
-1. Reads the gate name  
-2. Runs automation to open the gate  
-3. Sends a POST request to the server:
-
+MacroDroid does:
+1. Extract gate name  
+2. Trigger the relay or app to open the gate  
+3. Send:
+```
 POST /confirm
 {
   "gate": "Main",
   "status": "success"
 }
+```
 
-Phone does **not** use:
-✗ sessions  
-✗ timers  
-✗ polling  
-✗ history storage  
+The phone does **not**:
+✗ manage sessions  
+✗ store history  
+✗ retry  
+✗ poll  
+✗ hold any state  
 
 
-
-===========================================================
+============================================================
  FUTURE IMPROVEMENTS
-===========================================================
+============================================================
 
-• Add queue for multiple requests  
-• Add analytics and logs  
-• Cryptographic signing for secure phone-server communication  
-• Support multiple devices  
-• Admin dashboard  
-• Automatic retry logic  
+• Add queue to support multiple requests  
+• Add admin dashboard  
+• Add rate limiting per user  
+• Add analytics (success/failure logs)  
+• Add optional encryption/signature for phone callbacks  
+• Add multi-device support  
 
-===========================================================
+
+============================================================
  END OF DOCUMENT
-===========================================================
+============================================================

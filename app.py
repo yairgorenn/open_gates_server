@@ -9,21 +9,9 @@ app = Flask(__name__)
 
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 
-# ============================================================
-# Helpers to load/save JSON (Users + Gates)
-# ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def load_json(filename):
-    path = os.path.join(BASE_DIR, filename)
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(filename, data):
-    path = os.path.join(BASE_DIR, filename)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
 
 # Load static data
 USERS = load_json("users.json")["users"]

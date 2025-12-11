@@ -48,15 +48,6 @@ def set_device_free():
 # Hardcoded USERS + GATES
 # ============================================================
 
-#USERS = [
-   # {"name": "Yair", "token": "482913", "allowed_gates": "ALL"},
-    #{"name": "Miki", "token": "173025", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
-    #{"name": "Raz", "token": "650391", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
-    #{"name": "Nofar", "token": "902574", "allowed_gates": "ALL"},
-    #{"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
-    #{"name": "Tomer", "token": "319702", "allowed_gates": "ALL"},
-    #{"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
-#]
 # Load USERS from Railway environment variable
 USERS_JSON = os.getenv("USERS_JSON")
 
@@ -240,6 +231,25 @@ def status():
 
     return jsonify({"status": "ready"}), 200
 
+# ============================================================
+# PHONE TASK ENDPOINT (Simple test version)
+# ============================================================
+
+
+DEVICE_SECRET = os.getenv("DEVICE_SECRET", "NO_SECRET_DEFINED")
+
+@app.route("/phone_task", methods=["GET"])
+def phone_task():
+    # 1. verify secret
+    secret = request.args.get("device_secret")
+    if not secret or secret != DEVICE_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+
+    # 2. return a TEST COMMAND (constant)
+    return jsonify({
+        "task": "open",
+        "gate": "Main"
+    }), 200
 
 # ============================================================
 # Local server run

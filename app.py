@@ -181,22 +181,36 @@ def open_gate():
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
-    """Called by phone. Save result and release device."""
     global LAST_RESULT
 
     data = request.get_json()
-    status = data.get("status")
-    gate = data.get("gate")
 
-    if not status or not gate:
+    gate = data.get("gate")
+    status = data.get("status")
+    secret = data.get("device_secret")
+
+    # 1. validate payload
+    if not gate or not status or not secret:
         return jsonify({"error": "invalid payload"}), 400
 
-    # Map phone result → API result
+    # 2. validate secret
+    expected_secret = os.getenv("DEVICE_SECRET")
+    if secret != expected_secret:
+        return jsonify({"error": "unauthorized"}), 401
+
+    # 3. convert status
+    if status.lower() == "success":
+        server_status = "opened"
+    else:
+        server_status = "failed"
+
+    # 4. store result for client
     LAST_RESULT = {
-        "status": "opened" if status.lower() == "success" else "failed",
+        "status": server_status,
         "gate": gate
     }
 
+    # 5. release device
     set_device_free()
 
     return jsonify({"ok": True}), 200

@@ -48,15 +48,26 @@ def set_device_free():
 # Hardcoded USERS + GATES
 # ============================================================
 
-USERS = [
-    {"name": "Yair", "token": "482913", "allowed_gates": "ALL"},
-    {"name": "Miki", "token": "173025", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
-    {"name": "Raz", "token": "650391", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
-    {"name": "Nofar", "token": "902574", "allowed_gates": "ALL"},
-    {"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
-    {"name": "Tomer", "token": "319702", "allowed_gates": "ALL"},
-    {"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
-]
+#USERS = [
+   # {"name": "Yair", "token": "482913", "allowed_gates": "ALL"},
+    #{"name": "Miki", "token": "173025", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
+    #{"name": "Raz", "token": "650391", "allowed_gates": ["Main", "Enter", "Exit", "Gay"]},
+    #{"name": "Nofar", "token": "902574", "allowed_gates": "ALL"},
+    #{"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
+    #{"name": "Tomer", "token": "319702", "allowed_gates": "ALL"},
+    #{"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
+#]
+# Load USERS from Railway environment variable
+USERS_JSON = os.getenv("USERS_JSON")
+
+if USERS_JSON:
+    try:
+        USERS = json.loads(USERS_JSON)
+    except json.JSONDecodeError:
+        raise ValueError("❌ USERS_JSON is invalid JSON")
+else:
+    raise ValueError("❌ USERS_JSON is missing from environment variables")
+
 
 GATES = [
     {"name": "Main", "open_hours": [{"from": "00:00", "to": "23:59"}]},

@@ -6,6 +6,10 @@ import json
 
 app = Flask(__name__)
 LAST_RESULT = None
+LAST_PHONE_SEEN = 0
+PB_ALERT_SENT = False
+
+PHONE_TIMEOUT_SECONDS = 10 * 60  # 10 דקות
 
 # ============================================================
 # ENV
@@ -47,6 +51,28 @@ TASK_TIMESTAMP = 0
 # ============================================================
 # Helpers
 # ============================================================
+def send_pushbullet(title, body):
+    if not PUSHBULLET_API_KEY:
+        return
+
+    try:
+        requests.post(
+            "https://api.pushbullet.com/v2/pushes",
+            json={
+                "type": "note",
+                "title": title,
+                "body": body
+            },
+            headers={
+                "Access-Token": PUSHBULLET_API_KEY,
+                "Content-Type": "application/json"
+            },
+            timeout=5
+        )
+    except Exception:
+        pass  # לא מפיל שרת בגלל התראה
+
+
 
 def gate_is_open_now(gate_name):
     gate = next((g for g in GATES if g["name"] == gate_name), None)
@@ -82,6 +108,22 @@ def release_device():
 # ============================================================
 # Health check
 # ============================================================
+def check_phone_alive():
+    global PB_ALERT_SENT
+
+    if LAST_PHONE_SEEN == 0:
+        return  # עוד לא דיבר איתנו אף פעם
+
+    silence = time.time() - LAST_PHONE_SEEN
+
+    if silence > PHONE_TIMEOUT_SECONDS and not PB_ALERT_SENT:
+        send_pushbullet(
+            "⚠ Gate system alert",
+            f"No phone heartbeat for {int(silence/60)} minutes"
+        )
+        PB_ALERT_SENT = True
+
+
 
 @app.route("/", methods=["GET"])
 def home():
@@ -94,6 +136,7 @@ def home():
 
 @app.route("/allowed_gates", methods=["GET"])
 def allowed_gates():
+    check_phone_alive()
     token = request.args.get("token")
     if not token:
         return jsonify({"error": "token required"}), 400
@@ -115,6 +158,7 @@ def allowed_gates():
 
 @app.route("/open", methods=["POST"])
 def open_gate():
+    check_phone_alive()
     data = request.get_json()
     token = data.get("token")
     gate_name = data.get("gate")
@@ -158,6 +202,7 @@ def open_gate():
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():
+    check_phone_alive()
     secret = request.args.get("device_secret")
     if secret != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 403
@@ -203,6 +248,7 @@ def confirm():
 @app.route("/status", methods=["GET"])
 def status():
     global LAST_RESULT
+    check_phone_alive()
 
     if LAST_RESULT is not None:
         result = LAST_RESULT

@@ -184,6 +184,7 @@ def confirm():
 
     if secret != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
+    print("CONFIRM RECEIVED:", data, flush=True)
 
     release_device()
     return jsonify({"ok": True}), 200

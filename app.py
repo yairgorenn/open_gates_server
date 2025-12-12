@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 
 app = Flask(__name__)
+LAST_RESULT = None
 
 # ============================================================
 # ENV
@@ -173,8 +174,9 @@ def phone_task():
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
-    data = request.get_json()
+    global LAST_RESULT
 
+    data = request.get_json()
     gate = data.get("gate")
     status = data.get("status")
     secret = data.get("device_secret")
@@ -184,7 +186,11 @@ def confirm():
 
     if secret != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
-    print("CONFIRM RECEIVED:", data, flush=True)
+
+    LAST_RESULT = {
+        "status": "opened" if status.lower() == "success" else "failed",
+        "gate": gate
+    }
 
     release_device()
     return jsonify({"ok": True}), 200
@@ -196,6 +202,13 @@ def confirm():
 
 @app.route("/status", methods=["GET"])
 def status():
+    global LAST_RESULT
+
+    if LAST_RESULT is not None:
+        result = LAST_RESULT
+        LAST_RESULT = None
+        return jsonify(result), 200
+
     if DEVICE_BUSY:
         if time.time() - TASK_TIMESTAMP > 30:
             release_device()

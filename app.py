@@ -28,12 +28,12 @@ except json.JSONDecodeError:
 # ============================================================
 
 GATES = [
-    {"name": "Main", "open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Gay", "open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Enter", "open_hours": [{"from": "05:20", "to": "21:00"}]},
-    {"name": "Exit", "open_hours": [{"from": "05:20", "to": "21:00"}]},
-    {"name": "EinCarmel", "open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Almagor", "open_hours": [{"from": "00:00", "to": "23:59"}]}
+    {"name": "Main","phone_number":"972505471743", "open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Gay", "phone_number":"972503403742","open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Enter", "phone_number":"972503924081","open_hours": [{"from": "05:20", "to": "21:00"}]},
+    {"name": "Exit", "phone_number":"972503924106","open_hours": [{"from": "05:20", "to": "21:00"}]},
+    {"name": "EinCarmel", "phone_number":"972542688743","open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Almagor", "phone_number":"972503817647","open_hours": [{"from": "00:00", "to": "23:59"}]}
 ]
 
 # ============================================================
@@ -144,7 +144,8 @@ def open_gate():
     # Create task for phone
     lock_device({
         "task": "open",
-        "gate": gate
+        "gate": gate,
+        "phone_number": gate_obj["phone_number"]
     })
 
     return jsonify({"status": "task_created"}), 200

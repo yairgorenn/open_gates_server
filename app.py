@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import requests
 import os
 import time
 from datetime import datetime
@@ -11,7 +10,7 @@ app = Flask(__name__)
 # ENV
 # ============================================================
 
-PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
+PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")  # שמור לעתיד
 DEVICE_SECRET = os.getenv("DEVICE_SECRET")
 
 USERS_JSON = os.getenv("USERS_JSON")
@@ -28,12 +27,12 @@ except json.JSONDecodeError:
 # ============================================================
 
 GATES = [
-    {"name": "Main","phone_number":"972505471743", "open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Gay", "phone_number":"972503403742","open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Enter", "phone_number":"972503924081","open_hours": [{"from": "05:20", "to": "21:00"}]},
-    {"name": "Exit", "phone_number":"972503924106","open_hours": [{"from": "05:20", "to": "21:00"}]},
-    {"name": "EinCarmel", "phone_number":"972542688743","open_hours": [{"from": "00:00", "to": "23:59"}]},
-    {"name": "Almagor", "phone_number":"972503817647","open_hours": [{"from": "00:00", "to": "23:59"}]}
+    {"name": "Main",      "phone_number": "972505471743", "open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Gay",       "phone_number": "972503403742", "open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Enter",     "phone_number": "972503924081", "open_hours": [{"from": "05:20", "to": "21:00"}]},
+    {"name": "Exit",      "phone_number": "972503924106", "open_hours": [{"from": "05:20", "to": "21:00"}]},
+    {"name": "EinCarmel", "phone_number": "972542688743", "open_hours": [{"from": "00:00", "to": "23:59"}]},
+    {"name": "Almagor",   "phone_number": "972503817647", "open_hours": [{"from": "00:00", "to": "23:59"}]},
 ]
 
 # ============================================================
@@ -41,7 +40,7 @@ GATES = [
 # ============================================================
 
 DEVICE_BUSY = False
-CURRENT_TASK = None        # {"task": "open", "gate": "Main"}
+CURRENT_TASK = None        # {"task": "open", "gate": "...", "phone_number": "..."}
 TASK_TIMESTAMP = 0
 
 # ============================================================
@@ -80,7 +79,7 @@ def release_device():
 
 
 # ============================================================
-# Basic health
+# Health check
 # ============================================================
 
 @app.route("/", methods=["GET"])
@@ -115,13 +114,11 @@ def allowed_gates():
 
 @app.route("/open", methods=["POST"])
 def open_gate():
-    global CURRENT_TASK
-
     data = request.get_json()
     token = data.get("token")
-    gate = data.get("gate")
+    gate_name = data.get("gate")
 
-    if not token or not gate:
+    if not token or not gate_name:
         return jsonify({"error": "token and gate required"}), 400
 
     user = next((u for u in USERS if u["token"] == token), None)
@@ -132,19 +129,22 @@ def open_gate():
     if allowed == "ALL":
         allowed = [g["name"] for g in GATES]
 
-    if gate not in allowed:
+    if gate_name not in allowed:
         return jsonify({"error": "not allowed"}), 403
 
-    if not gate_is_open_now(gate):
+    if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed now"}), 403
 
     if device_busy():
         return jsonify({"error": "device busy"}), 409
 
-    # Create task for phone
+    gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
+    if not gate_obj:
+        return jsonify({"error": "unknown gate"}), 400
+
     lock_device({
         "task": "open",
-        "gate": gate,
+        "gate": gate_obj["name"],
         "phone_number": gate_obj["phone_number"]
     })
 
@@ -185,9 +185,7 @@ def confirm():
     if secret != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
-    # We don't care if success or failed here – just release
     release_device()
-
     return jsonify({"ok": True}), 200
 
 

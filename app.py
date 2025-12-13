@@ -21,9 +21,9 @@ rdb = redis.from_url(REDIS_URL, decode_responses=True)
 # =========================
 # CONFIG
 # =========================
-TASK_TTL = 25        # משימה חיה מקסימום 25 שניות
-CLIENT_TIMEOUT = 10  # אחרי 10 שניות – כישלון ללקוח
-RESULT_TTL = 10      # תוצאה חיה 10 שניות
+TASK_TTL = 25       # משימה חיה מקסימום 25 שניות
+CLIENT_TIMEOUT = 10 # אחרי 10 שניות – כישלון ללקוח
+RESULT_TTL = 10     # תוצאה חיה 10 שניות
 
 K_TASK   = "gate:task"
 K_RESULT = "gate:result"
@@ -130,10 +130,6 @@ def confirm():
     if data.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
-    task_json = rdb.get(K_TASK)
-    if not task_json:
-        return jsonify({"error": "no active task"}), 400
-
     status = data.get("status")
     gate = data.get("gate")
 
@@ -146,7 +142,13 @@ def confirm():
         "created_at": time.time()
     }
 
+    # 🔒 סוגרים משימה מיד
+    rdb.delete(K_TASK)
+    rdb.delete(K_LOCK)
+
+    # 📌 שומרים תוצאה ללקוח
     rdb.setex(K_RESULT, RESULT_TTL, json.dumps(result))
+
     return jsonify({"ok": True}), 200
 
 
@@ -154,31 +156,37 @@ def confirm():
 def status():
     now = time.time()
 
-    # 1️⃣ תוצאה מוכנה
+    # 1️⃣ יש תוצאה – מחזירים וסוגרים
     res = rdb.get(K_RESULT)
     if res:
         result = json.loads(res)
         rdb.delete(K_RESULT)
-        rdb.delete(K_TASK)
-        rdb.delete(K_LOCK)
         return jsonify(result), 200
 
-    # 2️⃣ משימה קיימת
+    # 2️⃣ יש משימה – בודקים timeout
     task_json = rdb.get(K_TASK)
     if task_json:
         task = json.loads(task_json)
+
         if now - task["created_at"] > CLIENT_TIMEOUT:
             fail = {
                 "status": "failed",
                 "gate": task["gate"],
                 "reason": "phone_timeout"
             }
+
+            # ❗ סוגרים משימה
+            rdb.delete(K_TASK)
+            rdb.delete(K_LOCK)
+
+            # 📌 שומרים תוצאה
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail))
+
             return jsonify(fail), 200
 
         return jsonify({"status": "pending"}), 200
 
-    # 3️⃣ כלום
+    # 3️⃣ אין כלום
     return jsonify({"status": "ready"}), 200
 
 

@@ -174,25 +174,25 @@ def confirm():
 def status():
     now = time.time()
 
-    # 1️⃣ יש תוצאה מהטלפון – מחזירים אותה ללקוח
+    # 1️⃣ יש תוצאה מוכנה (מהטלפון או timeout קודם)
     res_json = rdb.get(K_RESULT)
     if res_json:
         result = json.loads(res_json)
 
-        # ❗ סוגרים הכול רק אחרי שהלקוח קרא את התוצאה
+        # ✅ הלקוח קרא תוצאה → סוגרים הכול
         rdb.delete(K_RESULT)
         rdb.delete(K_TASK)
         rdb.delete(K_LOCK)
 
         return jsonify(result), 200
 
-    # 2️⃣ אין תוצאה – בודקים אם יש משימה פעילה
+    # 2️⃣ אין תוצאה – יש משימה פעילה?
     task_json = rdb.get(K_TASK)
     if task_json:
         task = json.loads(task_json)
         created_at = task.get("created_at", 0)
 
-        # ⏱ טלפון לא הגיב תוך 10 שניות
+        # ⏱ עברו 10 שניות בלי confirm מהטלפון
         if now - created_at > 10:
             fail_result = {
                 "status": "failed",
@@ -200,20 +200,19 @@ def status():
                 "reason": "phone_timeout"
             }
 
-            # שומרים תוצאה כדי שהלקוח יקרא
+            # ❗ שומרים תוצאה – אבל לא מוחקים אותה כאן
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail_result))
 
-            # ❗ לא מוחקים פה K_RESULT – רק אחרי שהלקוח יקרא
+            # ❗ סוגרים רק את המשימה, לא את התוצאה
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
 
             return jsonify(fail_result), 200
 
-        # עדיין ממתינים לטלפון
+        # ⏳ עדיין ממתינים לטלפון
         return jsonify({"status": "pending"}), 200
 
-    # 3️⃣ אין משימה ואין תוצאה → המערכת חופשייה
-    rdb.delete(K_LOCK)
+    # 3️⃣ אין משימה ואין תוצאה → המערכת פנויה
     return jsonify({"status": "ready"}), 200
 
 # =========================

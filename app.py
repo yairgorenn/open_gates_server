@@ -146,37 +146,40 @@ def confirm():
 
 @app.route("/status", methods=["GET"])
 def status():
-    task_json = rdb.get(K_TASK)
+    now = time.time()
 
-    if not task_json:
-        rdb.delete(K_LOCK)
-        return jsonify({"status": "ready"}), 200
-
-    task = json.loads(task_json)
-    elapsed = time.time() - task["created_at"]
-
-    # timeout טלפוני
-    if task["status"] == "pending" and elapsed >= CLIENT_TIMEOUT:
-        task["status"] = "failed"
-        task["reason"] = "phone_timeout"
-        rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
-
-    # אם יש תוצאה סופית → מחזירים וסוגרים
-    if task["status"] in ("opened", "failed"):
-        result = {
-            "status": task["status"],
-            "gate": task["gate"]
-        }
-        if "reason" in task:
-            result["reason"] = task["reason"]
-
-        # כאן הסגירה בפועל
+    # 1) יש תוצאה מוכנה
+    res_json = rdb.get(K_RESULT)
+    if res_json:
+        result = json.loads(res_json)
+        # הלקוח קרא → סוגרים הכל
+        rdb.delete(K_RESULT)
         rdb.delete(K_TASK)
         rdb.delete(K_LOCK)
-
         return jsonify(result), 200
 
-    return jsonify({"status": "pending"}), 200
+    # 2) יש משימה פעילה
+    task_json = rdb.get(K_TASK)
+    if task_json:
+        task = json.loads(task_json)
+        created_at = task.get("created_at", 0)
+
+        # עברו יותר מ־10 שניות בלי confirm → כישלון
+        if now - created_at > 10:
+            result = {
+                "status": "failed",
+                "gate": task["gate"],
+                "reason": "phone_timeout"
+            }
+            rdb.delete(K_TASK)
+            rdb.delete(K_LOCK)
+            rdb.setex(K_RESULT, RESULT_TTL, json.dumps(result))
+            return jsonify(result), 200
+
+        return jsonify({"status": "pending"}), 200
+
+    # 3) אין כלום → ready
+    return jsonify({"status": "ready"}), 200
 
 # =========================
 # RUN

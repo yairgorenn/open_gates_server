@@ -107,19 +107,37 @@ def open_gate():
 
     rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
     rdb.set(K_LOCK, "1", ex=TASK_TTL)
-
+    print("\n[OPEN]", flush=True)
+    print("[OPEN] task written:", task, flush=True)
+    print("[OPEN] redis K_TASK =", rdb.get(K_TASK), flush=True)
+    print("[OPEN] redis K_TASK ttl =", rdb.ttl(K_TASK), flush=True)
     return jsonify({"status": "task_created"}), 200
 
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():
-    if request.args.get("device_secret") != DEVICE_SECRET:
+    ts = time.time()
+    print(f"\n[PHONE_TASK] {ts}", flush=True)
+
+    secret = request.args.get("device_secret")
+    print("[PHONE_TASK] secret:", secret, flush=True)
+
+    if secret != DEVICE_SECRET:
+        print("[PHONE_TASK] ❌ unauthorized", flush=True)
         return jsonify({"error": "unauthorized"}), 403
 
+    # dump redis state
     task = rdb.get(K_TASK)
+    ttl = rdb.ttl(K_TASK)
+
+    print("[PHONE_TASK] redis K_TASK =", task, flush=True)
+    print("[PHONE_TASK] redis K_TASK ttl =", ttl, flush=True)
+
     if not task:
+        print("[PHONE_TASK] → returning NONE", flush=True)
         return jsonify({"task": "none"}), 200
 
+    print("[PHONE_TASK] → returning TASK", flush=True)
     return jsonify(json.loads(task)), 200
 
 

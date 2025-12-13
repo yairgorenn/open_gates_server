@@ -125,6 +125,8 @@ def open_gate():
 
         rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
         rdb.set(K_LOCK, "1", ex=LOCK_TTL)
+        print("OPEN: writing task", task, flush=True)
+        print("OPEN: redis now has:", rdb.get(K_TASK), flush=True)
 
         return jsonify({"status": "task_created"}), 200
 
@@ -134,7 +136,7 @@ def open_gate():
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():
-    print("PHONE_TASK start")
+    print("PHONE_TASK HIT", flush=True)
     if request.args.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 403
 

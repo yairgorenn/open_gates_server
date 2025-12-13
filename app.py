@@ -79,35 +79,42 @@ def allowed_gates():
 
 @app.route("/open", methods=["POST"])
 def open_gate():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     token = data.get("token")
     gate_name = data.get("gate")
+
+    if not token or not gate_name:
+        return jsonify({"error": "token and gate required"}), 400
 
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
         return jsonify({"error": "invalid token"}), 401
 
-    if user["allowed_gates"] != "ALL" and gate_name not in user["allowed_gates"]:
+    allowed = user["allowed_gates"]
+    if allowed != "ALL" and gate_name not in allowed:
         return jsonify({"error": "not allowed"}), 403
 
     if not gate_is_open_now(gate_name):
-        return jsonify({"error": "gate closed"}), 403
+        return jsonify({"error": "gate closed now"}), 403
 
-    gate = get_gate(gate_name)
-    if not gate:
+    gate_obj = get_gate(gate_name)
+    if not gate_obj:
         return jsonify({"error": "unknown gate"}), 400
 
-    if not acquire_lock():
+    # אם יש משימה או תוצאה פתוחה – המערכת עסוקה
+    if rdb.exists(K_TASK) or rdb.exists(K_RESULT):
         return jsonify({"error": "device busy"}), 409
 
     task = {
         "task": "open",
-        "gate": gate["name"],
-        "phone_number": gate["phone_number"],
+        "gate": gate_obj["name"],
+        "phone_number": gate_obj["phone_number"],
         "created_at": time.time()
     }
 
     rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+    rdb.set(K_LOCK, "1", ex=LOCK_TTL)
+
     return jsonify({"status": "task_created"}), 200
 
 @app.route("/phone_task", methods=["GET"])
@@ -124,23 +131,25 @@ def phone_task():
 @app.route("/confirm", methods=["POST"])
 def confirm():
     data = request.get_json(force=True) or {}
+
     if data.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
-    task_json = rdb.get(K_TASK)
-    if not task_json:
-        return jsonify({"error": "no active task"}), 400
-
-    task = json.loads(task_json)
-
+    gate = data.get("gate")
     status = (data.get("status") or "").lower()
-    if status not in ("success", "failed"):
-        return jsonify({"error": "invalid status"}), 400
 
-    task["status"] = "opened" if status == "success" else "failed"
+    if not gate or status not in ("success", "failed"):
+        return jsonify({"error": "invalid payload"}), 400
 
-    # שומרים חזרה – לא מוחקים
-    rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+    final_status = "opened" if status == "success" else "failed"
+
+    result = {
+        "status": final_status,
+        "gate": gate,
+        "created_at": time.time()
+    }
+
+    rdb.setex(K_RESULT, RESULT_TTL, json.dumps(result))
 
     return jsonify({"ok": True}), 200
 
@@ -148,37 +157,41 @@ def confirm():
 def status():
     now = time.time()
 
-    # 1) יש תוצאה מוכנה
+    # 1️⃣ יש תוצאה – מחזירים וסוגרים
     res_json = rdb.get(K_RESULT)
     if res_json:
         result = json.loads(res_json)
-        # הלקוח קרא → סוגרים הכל
+
         rdb.delete(K_RESULT)
         rdb.delete(K_TASK)
         rdb.delete(K_LOCK)
+
         return jsonify(result), 200
 
-    # 2) יש משימה פעילה
+    # 2️⃣ יש משימה פעילה
     task_json = rdb.get(K_TASK)
     if task_json:
         task = json.loads(task_json)
         created_at = task.get("created_at", 0)
 
-        # עברו יותר מ־10 שניות בלי confirm → כישלון
+        # ⏱ טלפון לא הגיב בזמן
         if now - created_at > 10:
-            result = {
+            fail_result = {
                 "status": "failed",
                 "gate": task["gate"],
                 "reason": "phone_timeout"
             }
+
+            rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail_result))
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
-            rdb.setex(K_RESULT, RESULT_TTL, json.dumps(result))
-            return jsonify(result), 200
+
+            return jsonify(fail_result), 200
 
         return jsonify({"status": "pending"}), 200
 
-    # 3) אין כלום → ready
+    # 3️⃣ אין כלום
+    rdb.delete(K_LOCK)
     return jsonify({"status": "ready"}), 200
 
 # =========================

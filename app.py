@@ -79,43 +79,47 @@ def allowed_gates():
 
 @app.route("/open", methods=["POST"])
 def open_gate():
-    data = request.get_json(force=True) or {}
-    token = data.get("token")
-    gate_name = data.get("gate")
+    try:
+        data = request.get_json(force=True) or {}
+        token = data.get("token")
+        gate_name = data.get("gate")
 
-    if not token or not gate_name:
-        return jsonify({"error": "token and gate required"}), 400
+        if not token or not gate_name:
+            return jsonify({"error": "token and gate required"}), 400
 
-    user = next((u for u in USERS if u["token"] == token), None)
-    if not user:
-        return jsonify({"error": "invalid token"}), 401
+        user = next((u for u in USERS if u["token"] == token), None)
+        if not user:
+            return jsonify({"error": "invalid token"}), 401
 
-    allowed = user["allowed_gates"]
-    if allowed != "ALL" and gate_name not in allowed:
-        return jsonify({"error": "not allowed"}), 403
+        allowed = user["allowed_gates"]
+        if allowed != "ALL" and gate_name not in allowed:
+            return jsonify({"error": "not allowed"}), 403
 
-    if not gate_is_open_now(gate_name):
-        return jsonify({"error": "gate closed now"}), 403
+        if not gate_is_open_now(gate_name):
+            return jsonify({"error": "gate closed now"}), 403
 
-    gate_obj = get_gate(gate_name)
-    if not gate_obj:
-        return jsonify({"error": "unknown gate"}), 400
+        gate_obj = get_gate(gate_name)
+        if not gate_obj:
+            return jsonify({"error": "unknown gate"}), 400
 
-    # אם יש משימה או תוצאה פתוחה – המערכת עסוקה
-    if rdb.exists(K_TASK) or rdb.exists(K_RESULT):
-        return jsonify({"error": "device busy"}), 409
+        if rdb.exists(K_TASK) or rdb.exists(K_RESULT):
+            return jsonify({"error": "device busy"}), 409
 
-    task = {
-        "task": "open",
-        "gate": gate_obj["name"],
-        "phone_number": gate_obj["phone_number"],
-        "created_at": time.time()
-    }
+        task = {
+            "task": "open",
+            "gate": gate_obj["name"],
+            "phone_number": gate_obj["phone_number"],
+            "created_at": time.time()
+        }
 
-    rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
-    rdb.set(K_LOCK, "1", ex=LOCK_TTL)
+        rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+        rdb.set(K_LOCK, "1", ex=LOCK_TTL)
 
-    return jsonify({"status": "task_created"}), 200
+        return jsonify({"status": "task_created"}), 200
+
+    except Exception as e:
+        print("OPEN ERROR:", e, flush=True)
+        return jsonify({"error": "internal error"}), 500
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():

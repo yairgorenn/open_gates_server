@@ -123,7 +123,7 @@ def phone_task():
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     if data.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
@@ -132,28 +132,49 @@ def confirm():
         return jsonify({"error": "no active task"}), 400
 
     task = json.loads(task_json)
-    clear_all()
 
-    status = "opened" if data.get("status") == "success" else "failed"
-    return jsonify({"status": status, "gate": task["gate"]}), 200
+    status = (data.get("status") or "").lower()
+    if status not in ("success", "failed"):
+        return jsonify({"error": "invalid status"}), 400
+
+    task["status"] = "opened" if status == "success" else "failed"
+
+    # שומרים חזרה – לא מוחקים
+    rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+
+    return jsonify({"ok": True}), 200
 
 @app.route("/status", methods=["GET"])
 def status():
     task_json = rdb.get(K_TASK)
+
     if not task_json:
-        clear_all()
+        rdb.delete(K_LOCK)
         return jsonify({"status": "ready"}), 200
 
     task = json.loads(task_json)
     elapsed = time.time() - task["created_at"]
 
-    if elapsed >= CLIENT_TIMEOUT:
-        clear_all()
-        return jsonify({
-            "status": "failed",
-            "gate": task["gate"],
-            "reason": "timeout"
-        }), 200
+    # timeout טלפוני
+    if task["status"] == "pending" and elapsed >= CLIENT_TIMEOUT:
+        task["status"] = "failed"
+        task["reason"] = "phone_timeout"
+        rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+
+    # אם יש תוצאה סופית → מחזירים וסוגרים
+    if task["status"] in ("opened", "failed"):
+        result = {
+            "status": task["status"],
+            "gate": task["gate"]
+        }
+        if "reason" in task:
+            result["reason"] = task["reason"]
+
+        # כאן הסגירה בפועל
+        rdb.delete(K_TASK)
+        rdb.delete(K_LOCK)
+
+        return jsonify(result), 200
 
     return jsonify({"status": "pending"}), 200
 

@@ -8,9 +8,9 @@ app = Flask(__name__)
 # =========================
 # CONFIG
 # =========================
-TASK_TTL   = 20   # משימה חיה עד 20 שניות
+TASK_TTL = 25   # task maximum time
 RESULT_TTL = 10   # תוצאה חיה עד 10 שניות
-LOCK_TTL   = 20   # מנעול למניעת פתיחה כפולה
+LOCK_TTL = 25   # מנעול למניעת פתיחה כפולה
 
 
 # =========================
@@ -29,7 +29,7 @@ rdb = redis.from_url(REDIS_URL, decode_responses=True)
 # =========================
 # CONFIG
 # =========================
-TASK_TTL = 20          # ניקוי אוטומטי
+
 CLIENT_TIMEOUT = 10    # אחרי 10 שניות – כישלון
 
 # Redis keys
@@ -174,24 +174,25 @@ def confirm():
 def status():
     now = time.time()
 
-    # 1️⃣ יש תוצאה – מחזירים וסוגרים
+    # 1️⃣ יש תוצאה מהטלפון – מחזירים אותה ללקוח
     res_json = rdb.get(K_RESULT)
     if res_json:
         result = json.loads(res_json)
 
+        # ❗ סוגרים הכול רק אחרי שהלקוח קרא את התוצאה
         rdb.delete(K_RESULT)
         rdb.delete(K_TASK)
         rdb.delete(K_LOCK)
 
         return jsonify(result), 200
 
-    # 2️⃣ יש משימה פעילה
+    # 2️⃣ אין תוצאה – בודקים אם יש משימה פעילה
     task_json = rdb.get(K_TASK)
     if task_json:
         task = json.loads(task_json)
         created_at = task.get("created_at", 0)
 
-        # ⏱ טלפון לא הגיב בזמן
+        # ⏱ טלפון לא הגיב תוך 10 שניות
         if now - created_at > 10:
             fail_result = {
                 "status": "failed",
@@ -199,15 +200,19 @@ def status():
                 "reason": "phone_timeout"
             }
 
+            # שומרים תוצאה כדי שהלקוח יקרא
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail_result))
+
+            # ❗ לא מוחקים פה K_RESULT – רק אחרי שהלקוח יקרא
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
 
             return jsonify(fail_result), 200
 
+        # עדיין ממתינים לטלפון
         return jsonify({"status": "pending"}), 200
 
-    # 3️⃣ אין כלום
+    # 3️⃣ אין משימה ואין תוצאה → המערכת חופשייה
     rdb.delete(K_LOCK)
     return jsonify({"status": "ready"}), 200
 

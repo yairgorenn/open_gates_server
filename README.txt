@@ -1,69 +1,115 @@
 ============================================================
- README — OpenGate Cloud System (Version 2.1, English)
+ README — OpenGate Cloud System (Version 2.3, English)
 ============================================================
 
 OVERVIEW
 --------
-A lightweight cloud-based gate-opening system consisting of:
+A lightweight cloud-based gate-opening system designed for very low traffic
+(only a few operations per day), with maximum reliability and minimal complexity.
 
-• Python Flask server hosted on Railway  
-• Pushbullet for delivering gate-open commands to a phone  
-• Android phone + MacroDroid acting ONLY as a hardware trigger  
-• All decision-making and permissions handled by the server  
-• No JSON storage, no session IDs, no polling loops on the server  
+Main components:
+• Python Flask server hosted on Railway
+• Android phone running MacroDroid
+• Optional Pushbullet notifications (monitoring / alerts only)
+• All logic, permissions, and scheduling handled by the server
+• No database, no sessions, no background workers
 
-The phone is a **dumb endpoint**:
-1. Receives a Pushbullet note with the gate name  
-2. Executes the physical opening  
-3. Reports back using `/confirm` with:
-   - gate name  
-   - status (“success” / “failed”)
-
-All state is held **in memory** on the server.
+The phone acts as a CONTROLLED EXECUTOR:
+• It never decides what to do
+• It polls the server and executes tasks
+• It reports results back to the server
 
 
-FILE STRUCTURE
----------------
-/app.py       — main server application  
-/README.txt   — documentation  
-/Dockerfile   — Railway deployment setup  
+============================================================
+ CORE DESIGN PRINCIPLES
+============================================================
 
-Gate and user definitions are embedded **inside app.py**.
+• Server is stateless beyond in-memory variables
+• Single device, single task at a time
+• Polling instead of inbound connections (no IP/VPN issues)
+• Everything works over HTTPS (TLS)
+• Secrets are stored only as Railway environment variables
+• Designed for 5–10 gate openings per week
 
 
-DATA STRUCTURE (inside app.py)
-------------------------------
-### Users:
-```python
-USERS = [
-    {"name": "Yair", "token": "482913", "allowed_gates": "ALL"},
-    {"name": "Miki", "token": "173025", "allowed_gates": ["Main","Enter","Exit","Gay"]},
-    {"name": "Raz",  "token": "650391", "allowed_gates": ["Main","Enter","Exit","Gay"]},
-    {"name": "Nofar","token": "902574", "allowed_gates": "ALL"},
-    {"name": "Liat", "token": "315760", "allowed_gates": "ALL"},
-    {"name": "Alon", "token": "768204", "allowed_gates": "ALL"}
+============================================================
+ FILE STRUCTURE
+============================================================
+
+/app.py        — main Flask server
+/README.txt    — documentation
+/Dockerfile    — Railway deployment
+
+No user or gate data files are stored in Git.
+
+
+============================================================
+ CONFIGURATION (ENV VARIABLES)
+============================================================
+
+All sensitive data is stored in Railway Environment Variables:
+
+USERS_JSON
+----------
+JSON array defining users and permissions:
+
+Example:
+[
+  {"name":"Yair","token":"482913","allowed_gates":"ALL"},
+  {"name":"Miki","token":"173025","allowed_gates":["Main","Enter","Exit","Gay"]},
+  {"name":"Raz","token":"650391","allowed_gates":["Main","Enter","Exit","Gay"]},
+  {"name":"Nofar","token":"902574","allowed_gates":"ALL"}
 ]
-```
 
-### Gates:
-```python
-GATES = {
-    "Main":      {"hours": ("00:00", "23:59")},
-    "Gay":       {"hours": ("00:00", "23:59")},
-    "Enter":     {"hours": ("05:20", "21:00")},
-    "Exit":      {"hours": ("05:20", "21:00")},
-    "EinCarmel": {"hours": ("00:00", "23:59")},
-    "Almagor":   {"hours": ("00:00", "23:59")}
-}
-```
+DEVICE_SECRET
+-------------
+Shared secret between server and phone.
+Used to authenticate:
+• /phone_task
+• /confirm
 
-### Global device state:
-```python
-DEVICE_BUSY = False
-LAST_GATE = None
-LAST_STATUS = None   # NEW — stores "opened", "failed", or None
-DEVICE_TIMESTAMP = 0
-```
+PUSHBULLET_API_KEY
+------------------
+Optional.
+Used only for alerts (e.g. phone offline).
+
+
+============================================================
+ GATES DEFINITION (inside app.py)
+============================================================
+
+Each gate is defined in one place with:
+• Name
+• Phone number (for dial-based opening)
+• Allowed time window
+
+Example:
+[
+  {
+    "name": "Main",
+    "phone_number": "972505471743",
+    "open_hours": [{"from":"00:00","to":"23:59"}]
+  },
+  {
+    "name": "Enter",
+    "phone_number": "972503924081",
+    "open_hours": [{"from":"05:20","to":"21:00"}]
+  }
+]
+
+
+============================================================
+ INTERNAL SERVER STATE (IN-MEMORY)
+============================================================
+
+DEVICE_BUSY        — True while phone is executing a task
+CURRENT_TASK       — Current task sent to phone
+TASK_TIMESTAMP     — When the task was created
+LAST_RESULT        — Last execution result for the client
+LAST_PHONE_SEEN    — Last time the phone contacted the server
+PB_ALERT_SENT      — Prevents duplicate alerts
+
+No state is persisted across restarts.
 
 
 ============================================================
@@ -75,160 +121,160 @@ DEVICE_TIMESTAMP = 0
 GET /
 
 Response:
-```json
 { "status": "ok" }
-```
+
+Used only for manual testing.
 
 
-2) GET ALLOWED GATES
---------------------
-GET /allowed_gates?token=XXXXX
-
-If user has `"allowed_gates": "ALL"`, the server returns all gates.
-
-Response example:
-```json
-{
-  "allowed": ["Main","Enter","Exit","Gay","EinCarmel","Almagor"]
-}
-```
-
-
-3) OPEN GATE (client → server → phone)
---------------------------------------
-POST /open  
-Body:
-```json
-{
-  "token": "XXXXXX",
-  "gate": "Main"
-}
-```
-
-Server flow:
-✓ Validate token  
-✓ Validate permissions  
-✓ Validate gate exists  
-✓ Validate time window  
-✓ Ensure device is NOT busy  
-✓ Mark device busy  
-✓ Save LAST_GATE  
-✓ Clear LAST_STATUS  
-✓ Send Pushbullet message to the phone  
+2) GET ALLOWED GATES (Client → Server)
+-------------------------------------
+GET /allowed_gates?token=XXXX
 
 Response:
-```json
-{ "status": "sent" }
-```
-
-
-4) PHONE CONFIRMATION
----------------------
-POST /confirm  
-Body:
-```json
 {
-  "gate": "Main",
-  "status": "success"
+  "allowed": ["Main","Gay","Enter","Exit","EinCarmel","Almagor"]
 }
-```
-
-Server behavior:
-✓ Saves LAST_STATUS (“opened” or “failed”)  
-✓ Releases device lock  
-✓ Returns:
-```json
-{ "ok": true }
-```
 
 
-5) CLIENT STATUS CHECK (new simplified model)
----------------------------------------------
+3) CREATE TASK (Client → Server)
+--------------------------------
+POST /open
+
+Body:
+{
+  "token": "XXXXXX",
+  "gate": "Enter"
+}
+
+Server flow:
+✓ Validate token
+✓ Validate user permissions
+✓ Validate gate schedule
+✓ Ensure device is not busy
+✓ Create CURRENT_TASK
+✓ Lock device
+
+Response:
+{ "status": "task_created" }
+
+
+4) PHONE POLLING (Phone → Server)
+---------------------------------
+GET /phone_task?device_secret=XXXXX
+
+Responses:
+• Task available:
+{
+  "task": "open",
+  "gate": "Enter",
+  "phone_number": "972503924081"
+}
+
+• No task:
+{ "task": "none" }
+
+Phone polls every 2–10 seconds (dynamic).
+
+
+5) CONFIRM RESULT (Phone → Server)
+----------------------------------
+POST /confirm
+
+Body:
+{
+  "gate": "Enter",
+  "status": "success",
+  "device_secret": "XXXXX"
+}
+
+Server:
+✓ Stores LAST_RESULT
+✓ Releases device lock
+
+
+6) CLIENT STATUS (Client → Server)
+----------------------------------
 GET /status
 
-Server responses:
-```json
-{ "status": "pending" }       // device busy
-{ "status": "opened", "gate": "Main" }
-{ "status": "failed", "gate": "Main" }
-{ "status": "ready" }         // idle and no result waiting
-```
+Responses:
+{ "status": "pending" }
+{ "status": "opened", "gate": "Enter" }
+{ "status": "failed", "gate": "Enter" }
+{ "status": "ready" }
 
-Right after the client consumes “opened”/“failed”,  
-the server resets `LAST_STATUS = None`.
+Results are returned ONCE and then cleared.
 
 
 ============================================================
- DEVICE BUSY & RESULT LOGIC
+ TIMEOUT & SAFETY LOGIC
 ============================================================
 
-The Android device can open only **one gate at a time**.
+Task timeout:
+• If phone does not execute task within TASK_TIMEOUT (e.g. 20s)
+→ task is discarded, device released
 
-Server rules:
-• Before /open: check `DEVICE_BUSY`  
-• During operation: `DEVICE_BUSY = True`  
-• When phone calls /confirm → `DEVICE_BUSY = False`  
-• The open-result is stored in `LAST_STATUS`  
-• Client reads it using /status  
-• After client reads → server clears the result  
+Phone heartbeat monitoring:
+• LAST_PHONE_SEEN updated on every phone request
+• If phone silent for > 10 minutes:
+→ Pushbullet alert is sent once
 
-This ensures:
-✓ No race conditions  
-✓ No memory leaks  
-✓ No session IDs needed  
-✓ Works with one device reliably  
+This logic is triggered opportunistically
+(only when server receives any request).
 
 
 ============================================================
- ERROR CODES
+ PUSHBULLET ROLE (CURRENT)
 ============================================================
 
-400 — Missing fields  
-401 — Invalid token  
-403 — Not allowed / Gate closed  
-409 — Device busy  
-500 — Pushbullet failure or internal error  
+Pushbullet is NOT used to open gates.
 
+It is used ONLY for:
+• Alerts when phone stops polling
+• Future admin notifications
 
-============================================================
- MACRODROID LOGIC (PHONE SIDE)
-============================================================
-
-Pushbullet sends the body:
-```
-gate=Main
-```
-
-MacroDroid does:
-1. Extract gate name  
-2. Trigger the relay or app to open the gate  
-3. Send:
-```
-POST /confirm
-{
-  "gate": "Main",
-  "status": "success"
-}
-```
-
-The phone does **not**:
-✗ manage sessions  
-✗ store history  
-✗ retry  
-✗ poll  
-✗ hold any state  
+If Pushbullet fails, system continues to operate.
 
 
 ============================================================
- FUTURE IMPROVEMENTS
+ MACRODROID ROLE (PHONE)
 ============================================================
 
-• Add queue to support multiple requests  
-• Add admin dashboard  
-• Add rate limiting per user  
-• Add analytics (success/failure logs)  
-• Add optional encryption/signature for phone callbacks  
-• Add multi-device support  
+The phone:
+• Polls /phone_task
+• Executes exactly one task at a time
+• Opens gate via app UI or phone call
+• Sends /confirm with result
+• Does NOT queue, retry, or decide
+
+
+============================================================
+ SCALING & LIMITATIONS
+============================================================
+
+This system is intentionally:
+• Single-device
+• Single-task
+• In-memory only
+
+It is NOT designed for:
+• High traffic
+• Multiple phones
+• Guaranteed delivery after restart
+
+Given the real usage (few operations per week),
+this design is optimal and safe.
+
+
+============================================================
+ FUTURE IMPROVEMENTS (OPTIONAL)
+============================================================
+
+• Task queue
+• Multi-device support
+• Admin UI
+• Persistent logs
+• Signed payloads (HMAC)
+• Replace MacroDroid with native Android app
 
 
 ============================================================

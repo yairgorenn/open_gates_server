@@ -11,16 +11,27 @@ app = Flask(__name__)
 # GLOBAL STATE
 # ============================================================
 
-LAST_RESULT = None
+
 LAST_PHONE_SEEN = 0
 PB_ALERT_SENT = False
 
 PHONE_TIMEOUT_SECONDS = 10 * 60  # 10 minutes
-TASK_TIMEOUT = 20               # seconds
 
-DEVICE_BUSY = False
-CURRENT_TASK = None
-TASK_TIMESTAMP = 0
+# ============================================================
+# FSM STATE
+# ============================================================
+
+STATE = "IDLE"  # IDLE | PENDING | FAILED | OPENED
+
+CURRENT_TASK = None        # {"gate": "...", "phone_number": "..."}
+TASK_CREATED_AT = 0
+
+LAST_RESULT = None         # {"status": "failed/opened", "gate": "...", "reason": "..."}
+RESULT_CREATED_AT = 0
+
+TASK_TIMEOUT = 20          # seconds (phone execution)
+CLIENT_READ_TIMEOUT = 10   # seconds (client polling)
+
 
 # ============================================================
 # ENV
@@ -140,8 +151,13 @@ def allowed_gates():
 
 @app.route("/open", methods=["POST"])
 def open_gate():
+    global STATE, CURRENT_TASK, TASK_CREATED_AT
+
     check_phone_alive()
     data = request.get_json()
+
+    if STATE != "IDLE":
+        return jsonify({"error": "device busy"}), 409
 
     token = data.get("token")
     gate_name = data.get("gate")
@@ -157,16 +173,17 @@ def open_gate():
     if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed now"}), 403
 
-    if DEVICE_BUSY:
-        return jsonify({"error": "device busy"}), 409
+    gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
+    if not gate_obj:
+        return jsonify({"error": "unknown gate"}), 400
 
-    gate_obj = next(g for g in GATES if g["name"] == gate_name)
-
-    lock_device({
-        "task": "open",
+    CURRENT_TASK = {
         "gate": gate_obj["name"],
         "phone_number": gate_obj["phone_number"]
-    })
+    }
+
+    STATE = "PENDING"
+    TASK_CREATED_AT = time.time()
 
     return jsonify({"status": "task_created"}), 200
 
@@ -193,35 +210,60 @@ def phone_task():
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
-    global LAST_RESULT
+    global STATE, LAST_RESULT, RESULT_CREATED_AT, CURRENT_TASK
 
     data = request.get_json()
     if data.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
+    if STATE != "PENDING":
+        return jsonify({"error": "no active task"}), 400
+
+    status = data.get("status")
+    gate = data.get("gate")
+
     LAST_RESULT = {
-        "status": "opened" if data.get("status") == "success" else "failed",
-        "gate": data.get("gate")
+        "status": "opened" if status == "success" else "failed",
+        "gate": gate
     }
 
-    release_device()
+    STATE = LAST_RESULT["status"].upper()  # OPENED / FAILED
+    RESULT_CREATED_AT = time.time()
+    CURRENT_TASK = None
+
     return jsonify({"ok": True}), 200
 
 
 @app.route("/status", methods=["GET"])
 def status():
-    global LAST_RESULT
+    global STATE, LAST_RESULT, CURRENT_TASK
+
     check_phone_alive()
+    now = time.time()
 
-    if LAST_RESULT:
-        res = LAST_RESULT
-        LAST_RESULT = None
-        return jsonify(res), 200
+    # ⏱ טלפון לא ענה בזמן → FAILED
+    if STATE == "PENDING" and now - TASK_CREATED_AT > TASK_TIMEOUT:
+        LAST_RESULT = {
+            "status": "failed",
+            "gate": CURRENT_TASK["gate"],
+            "reason": "phone_timeout"
+        }
+        STATE = "FAILED"
+        RESULT_CREATED_AT = now
+        CURRENT_TASK = None
 
-    if DEVICE_BUSY:
-        if is_task_expired():
-            release_device()
-            return jsonify({"status": "failed", "reason": "phone_timeout"}), 200
+    # ✅ יש תוצאה סופית
+    if STATE in ("FAILED", "OPENED"):
+        # ⏱ הלקוח נעלם → reset
+        if now - RESULT_CREATED_AT > CLIENT_READ_TIMEOUT:
+            STATE = "IDLE"
+            LAST_RESULT = None
+            return jsonify({"status": "ready"}), 200
+
+        return jsonify(LAST_RESULT), 200
+
+    # ⏳ עדיין ממתינים
+    if STATE == "PENDING":
         return jsonify({"status": "pending"}), 200
 
     return jsonify({"status": "ready"}), 200

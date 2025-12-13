@@ -8,30 +8,27 @@ import requests
 app = Flask(__name__)
 
 # ============================================================
-# GLOBAL STATE
-# ============================================================
-
-
-LAST_PHONE_SEEN = 0
-PB_ALERT_SENT = False
-
-PHONE_TIMEOUT_SECONDS = 10 * 60  # 10 minutes
-
-# ============================================================
 # FSM STATE
 # ============================================================
 
-STATE = "IDLE"  # IDLE | PENDING | FAILED | OPENED
+STATE = "IDLE"          # IDLE | PENDING | OPENED | FAILED
 
-CURRENT_TASK = None        # {"gate": "...", "phone_number": "..."}
+CURRENT_TASK = None     # {"gate": "...", "phone_number": "..."}
 TASK_CREATED_AT = 0
 
-LAST_RESULT = None         # {"status": "failed/opened", "gate": "...", "reason": "..."}
+LAST_RESULT = None      # {"status": "...", "gate": "...", "reason": "..."}
 RESULT_CREATED_AT = 0
 
-TASK_TIMEOUT = 20          # seconds (phone execution)
-CLIENT_READ_TIMEOUT = 10   # seconds (client polling)
+TASK_TIMEOUT = 20       # seconds – phone must act
+CLIENT_READ_TIMEOUT = 10  # seconds – client must read result
 
+# ============================================================
+# PHONE MONITORING
+# ============================================================
+
+LAST_PHONE_SEEN = 0
+PB_ALERT_SENT = False
+PHONE_TIMEOUT_SECONDS = 10 * 60
 
 # ============================================================
 # ENV
@@ -40,11 +37,7 @@ CLIENT_READ_TIMEOUT = 10   # seconds (client polling)
 PUSHBULLET_API_KEY = os.getenv("PUSHBULLET_API_KEY")
 DEVICE_SECRET = os.getenv("DEVICE_SECRET")
 
-USERS_JSON = os.getenv("USERS_JSON")
-if not USERS_JSON:
-    raise ValueError("USERS_JSON missing from environment")
-
-USERS = json.loads(USERS_JSON)
+USERS = json.loads(os.getenv("USERS_JSON"))
 
 # ============================================================
 # GATES
@@ -63,6 +56,17 @@ GATES = [
 # HELPERS
 # ============================================================
 
+def gate_is_open_now(gate_name):
+    gate = next(g for g in GATES if g["name"] == gate_name)
+    now = datetime.now().time()
+    for rule in gate["open_hours"]:
+        f = datetime.strptime(rule["from"], "%H:%M").time()
+        t = datetime.strptime(rule["to"], "%H:%M").time()
+        if f <= now <= t:
+            return True
+    return False
+
+
 def send_pushbullet(title, body):
     if not PUSHBULLET_API_KEY:
         return
@@ -77,42 +81,8 @@ def send_pushbullet(title, body):
         pass
 
 
-def gate_is_open_now(gate_name):
-    gate = next((g for g in GATES if g["name"] == gate_name), None)
-    if not gate:
-        return False
-
-    now = datetime.now().time()
-    for rule in gate["open_hours"]:
-        t_from = datetime.strptime(rule["from"], "%H:%M").time()
-        t_to = datetime.strptime(rule["to"], "%H:%M").time()
-        if t_from <= now <= t_to:
-            return True
-    return False
-
-
-def lock_device(task):
-    global DEVICE_BUSY, CURRENT_TASK, TASK_TIMESTAMP
-    DEVICE_BUSY = True
-    CURRENT_TASK = task
-    TASK_TIMESTAMP = time.time()
-
-
-def release_device():
-    global DEVICE_BUSY, CURRENT_TASK
-    DEVICE_BUSY = False
-    CURRENT_TASK = None
-
-
-def is_task_expired():
-    if not CURRENT_TASK:
-        return False
-    return (time.time() - TASK_TIMESTAMP) > TASK_TIMEOUT
-
-
 def check_phone_alive():
     global PB_ALERT_SENT
-
     if LAST_PHONE_SEEN == 0:
         return
 
@@ -120,7 +90,7 @@ def check_phone_alive():
     if silence > PHONE_TIMEOUT_SECONDS and not PB_ALERT_SENT:
         send_pushbullet(
             "⚠ Gate system alert",
-            f"No phone heartbeat for {int(silence / 60)} minutes"
+            f"No phone heartbeat for {int(silence/60)} minutes"
         )
         PB_ALERT_SENT = True
 
@@ -139,14 +109,13 @@ def allowed_gates():
     check_phone_alive()
     token = request.args.get("token")
 
-    user = next((u for u in USERS if u["token"] == token), None)
-    if not user:
-        return jsonify({"error": "invalid token"}), 401
+    user = next(u for u in USERS if u["token"] == token)
+    allowed = user["allowed_gates"]
 
-    if user["allowed_gates"] == "ALL":
+    if allowed == "ALL":
         return jsonify({"allowed": [g["name"] for g in GATES]}), 200
 
-    return jsonify({"allowed": user["allowed_gates"]}), 200
+    return jsonify({"allowed": allowed}), 200
 
 
 @app.route("/open", methods=["POST"])
@@ -154,32 +123,27 @@ def open_gate():
     global STATE, CURRENT_TASK, TASK_CREATED_AT
 
     check_phone_alive()
-    data = request.get_json()
 
     if STATE != "IDLE":
         return jsonify({"error": "device busy"}), 409
 
-    token = data.get("token")
-    gate_name = data.get("gate")
+    data = request.get_json()
+    token = data["token"]
+    gate_name = data["gate"]
 
-    user = next((u for u in USERS if u["token"] == token), None)
-    if not user:
-        return jsonify({"error": "invalid token"}), 401
-
-    allowed = user["allowed_gates"]
-    if allowed != "ALL" and gate_name not in allowed:
+    user = next(u for u in USERS if u["token"] == token)
+    if user["allowed_gates"] != "ALL" and gate_name not in user["allowed_gates"]:
         return jsonify({"error": "not allowed"}), 403
 
     if not gate_is_open_now(gate_name):
-        return jsonify({"error": "gate closed now"}), 403
+        return jsonify({"error": "gate closed"}), 403
 
-    gate_obj = next((g for g in GATES if g["name"] == gate_name), None)
-    if not gate_obj:
-        return jsonify({"error": "unknown gate"}), 400
+    gate = next(g for g in GATES if g["name"] == gate_name)
 
     CURRENT_TASK = {
-        "gate": gate_obj["name"],
-        "phone_number": gate_obj["phone_number"]
+        "task": "open",
+        "gate": gate["name"],
+        "phone_number": gate["phone_number"]
     }
 
     STATE = "PENDING"
@@ -192,17 +156,13 @@ def open_gate():
 def phone_task():
     global LAST_PHONE_SEEN, PB_ALERT_SENT
 
-    secret = request.args.get("device_secret")
-    if secret != DEVICE_SECRET:
+    if request.args.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 403
 
     LAST_PHONE_SEEN = time.time()
     PB_ALERT_SENT = False
 
-    if is_task_expired():
-        release_device()
-
-    if CURRENT_TASK:
+    if STATE == "PENDING":
         return jsonify(CURRENT_TASK), 200
 
     return jsonify({"task": "none"}), 200
@@ -219,15 +179,12 @@ def confirm():
     if STATE != "PENDING":
         return jsonify({"error": "no active task"}), 400
 
-    status = data.get("status")
-    gate = data.get("gate")
-
     LAST_RESULT = {
-        "status": "opened" if status == "success" else "failed",
-        "gate": gate
+        "status": "opened" if data["status"] == "success" else "failed",
+        "gate": data["gate"]
     }
 
-    STATE = LAST_RESULT["status"].upper()  # OPENED / FAILED
+    STATE = LAST_RESULT["status"].upper()
     RESULT_CREATED_AT = time.time()
     CURRENT_TASK = None
 
@@ -241,7 +198,7 @@ def status():
     check_phone_alive()
     now = time.time()
 
-    # ⏱ טלפון לא ענה בזמן → FAILED
+    # טלפון לא ענה
     if STATE == "PENDING" and now - TASK_CREATED_AT > TASK_TIMEOUT:
         LAST_RESULT = {
             "status": "failed",
@@ -252,9 +209,8 @@ def status():
         RESULT_CREATED_AT = now
         CURRENT_TASK = None
 
-    # ✅ יש תוצאה סופית
+    # תוצאה זמינה
     if STATE in ("FAILED", "OPENED"):
-        # ⏱ הלקוח נעלם → reset
         if now - RESULT_CREATED_AT > CLIENT_READ_TIMEOUT:
             STATE = "IDLE"
             LAST_RESULT = None
@@ -262,7 +218,6 @@ def status():
 
         return jsonify(LAST_RESULT), 200
 
-    # ⏳ עדיין ממתינים
     if STATE == "PENDING":
         return jsonify({"status": "pending"}), 200
 

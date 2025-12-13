@@ -24,8 +24,11 @@ rdb = redis.from_url(REDIS_URL, decode_responses=True)
 TASK_TTL = 20          # ניקוי אוטומטי
 CLIENT_TIMEOUT = 10    # אחרי 10 שניות – כישלון
 
-K_TASK = "gate:task"
-K_LOCK = "gate:lock"
+# Redis keys
+K_TASK   = "gate:task"
+K_RESULT = "gate:result"
+K_LOCK   = "gate:lock"
+
 
 # =========================
 # GATES

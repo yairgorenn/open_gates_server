@@ -134,6 +134,7 @@ def open_gate():
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():
+    print("PHONE_TASK start")
     if request.args.get("device_secret") != DEVICE_SECRET:
         return jsonify({"error": "unauthorized"}), 403
 

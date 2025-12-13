@@ -138,6 +138,7 @@ def phone_task():
         return jsonify({"error": "unauthorized"}), 403
 
     task = rdb.get(K_TASK)
+    print("PHONE_TASK READ:", task)
     if not task:
         return jsonify({"task": "none"}), 200
 

@@ -21,9 +21,9 @@ rdb = redis.from_url(REDIS_URL, decode_responses=True)
 # =========================
 # CONFIG
 # =========================
-TASK_TTL = 25       # משימה חיה מקסימום 25 שניות
-CLIENT_TIMEOUT = 10 # אחרי 10 שניות – כישלון ללקוח
-RESULT_TTL = 10     # תוצאה חיה 10 שניות
+TASK_TTL = 25        # Max lifetime of a task (seconds)
+CLIENT_TIMEOUT = 10  # Client-side timeout (seconds)
+RESULT_TTL = 10      # Result retention time (seconds)
 
 K_TASK   = "gate:task"
 K_RESULT = "gate:result"
@@ -42,12 +42,15 @@ GATES = [
 ]
 
 def get_gate(name):
+    """Return gate definition by name."""
     return next((g for g in GATES if g["name"] == name), None)
 
 def gate_is_open_now(name):
+    """Check if gate is currently within allowed opening hours."""
     gate = get_gate(name)
     if not gate:
         return False
+
     now = datetime.now().time()
     for r in gate["open_hours"]:
         if datetime.strptime(r["from"], "%H:%M").time() <= now <= datetime.strptime(r["to"], "%H:%M").time():
@@ -60,11 +63,13 @@ def gate_is_open_now(name):
 
 @app.route("/", methods=["GET"])
 def home():
+    """Health check."""
     return jsonify({"status": "ok"}), 200
 
 
 @app.route("/allowed_gates", methods=["GET"])
 def allowed_gates():
+    """Return gates allowed for the given user token."""
     token = request.args.get("token")
     user = next((u for u in USERS if u["token"] == token), None)
     if not user:
@@ -72,11 +77,16 @@ def allowed_gates():
 
     if user["allowed_gates"] == "ALL":
         return jsonify({"allowed": [g["name"] for g in GATES]}), 200
+
     return jsonify({"allowed": user["allowed_gates"]}), 200
 
 
 @app.route("/open", methods=["POST"])
 def open_gate():
+    """
+    Create a new gate open task.
+    Only one active task or result is allowed at a time.
+    """
     data = request.get_json(force=True) or {}
     token = data.get("token")
     gate_name = data.get("gate")
@@ -107,42 +117,33 @@ def open_gate():
 
     rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
     rdb.set(K_LOCK, "1", ex=TASK_TTL)
-    print("\n[OPEN]", flush=True)
-    print("[OPEN] task written:", task, flush=True)
-    print("[OPEN] redis K_TASK =", rdb.get(K_TASK), flush=True)
-    print("[OPEN] redis K_TASK ttl =", rdb.ttl(K_TASK), flush=True)
+
     return jsonify({"status": "task_created"}), 200
 
 
 @app.route("/phone_task", methods=["GET"])
 def phone_task():
-    ts = time.time()
-    print(f"\n[PHONE_TASK] {ts}", flush=True)
-
+    """
+    Polled by the phone every few seconds.
+    Returns an open task if available, otherwise 'none'.
+    """
     secret = request.args.get("device_secret")
-    print("[PHONE_TASK] secret:", secret, flush=True)
-
     if secret != DEVICE_SECRET:
-        print("[PHONE_TASK] ❌ unauthorized", flush=True)
         return jsonify({"error": "unauthorized"}), 403
 
-    # dump redis state
     task = rdb.get(K_TASK)
-    ttl = rdb.ttl(K_TASK)
-
-    print("[PHONE_TASK] redis K_TASK =", task, flush=True)
-    print("[PHONE_TASK] redis K_TASK ttl =", ttl, flush=True)
-
     if not task:
-        print("[PHONE_TASK] → returning NONE", flush=True)
         return jsonify({"task": "none"}), 200
 
-    print("[PHONE_TASK] → returning TASK", flush=True)
     return jsonify(json.loads(task)), 200
 
 
 @app.route("/confirm", methods=["POST"])
 def confirm():
+    """
+    Called by the phone after execution.
+    Closes the task and publishes a short-lived result.
+    """
     data = request.get_json(force=True) or {}
 
     if data.get("device_secret") != DEVICE_SECRET:
@@ -160,11 +161,8 @@ def confirm():
         "created_at": time.time()
     }
 
-    # 🔒 סוגרים משימה מיד
     rdb.delete(K_TASK)
     rdb.delete(K_LOCK)
-
-    # 📌 שומרים תוצאה ללקוח
     rdb.setex(K_RESULT, RESULT_TTL, json.dumps(result))
 
     return jsonify({"ok": True}), 200
@@ -172,16 +170,18 @@ def confirm():
 
 @app.route("/status", methods=["GET"])
 def status():
+    """
+    Client status endpoint.
+    Handles result delivery, timeout detection, and readiness.
+    """
     now = time.time()
 
-    # 1️⃣ יש תוצאה – מחזירים וסוגרים
     res = rdb.get(K_RESULT)
     if res:
         result = json.loads(res)
         rdb.delete(K_RESULT)
         return jsonify(result), 200
 
-    # 2️⃣ יש משימה – בודקים timeout
     task_json = rdb.get(K_TASK)
     if task_json:
         task = json.loads(task_json)
@@ -193,18 +193,14 @@ def status():
                 "reason": "phone_timeout"
             }
 
-            # ❗ סוגרים משימה
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
-
-            # 📌 שומרים תוצאה
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail))
 
             return jsonify(fail), 200
 
         return jsonify({"status": "pending"}), 200
 
-    # 3️⃣ אין כלום
     return jsonify({"status": "ready"}), 200
 
 

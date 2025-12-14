@@ -3,6 +3,8 @@ import os, time, json
 from datetime import datetime
 import redis
 import requests
+import uuid
+
 
 
 app = Flask(__name__)
@@ -87,6 +89,36 @@ def send_pushbullet(title, body):
         # Never break main flow because of notification failure
         pass
 
+
+def log_gate_open(user, token, gate_name):
+    """
+    Store a gate open log entry in Redis.
+
+    Each log is stored as a standalone key with a 30-day TTL.
+    This function must NEVER affect the main flow.
+    """
+
+    try:
+        ts = int(time.time())
+        log_key = f"gate:log:{ts}:{uuid.uuid4().hex[:6]}"
+
+        log_entry = {
+            "user": user.get("name", "unknown"),
+            "token": token,
+            "gate": gate_name,
+            "time": ts
+        }
+
+        rdb.setex(
+            log_key,
+            30 * 24 * 3600,  # 30 days
+            json.dumps(log_entry)
+        )
+
+    except Exception:
+        # Logging must never break the system
+        pass
+
 # =========================
 # ROUTES
 # =========================
@@ -147,6 +179,9 @@ def open_gate():
 
     rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
     rdb.set(K_LOCK, "1", ex=TASK_TTL)
+
+    # log redis
+    log_gate_open(user, token, gate_name)
 
     return jsonify({"status": "task_created"}), 200
 

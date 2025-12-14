@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 import os, time, json
 from datetime import datetime
 import redis
+import requests
+
 
 app = Flask(__name__)
 
@@ -56,6 +58,34 @@ def gate_is_open_now(name):
         if datetime.strptime(r["from"], "%H:%M").time() <= now <= datetime.strptime(r["to"], "%H:%M").time():
             return True
     return False
+
+
+def send_pushbullet(title, body):
+    """
+    Send a Pushbullet notification.
+    Best-effort only (failures are ignored).
+    """
+    api_key = os.getenv("PUSHBULLET_API_KEY")
+    if not api_key:
+        return
+
+    try:
+        requests.post(
+            "https://api.pushbullet.com/v2/pushes",
+            headers={
+                "Access-Token": api_key,
+                "Content-Type": "application/json"
+            },
+            json={
+                "type": "note",
+                "title": title,
+                "body": body
+            },
+            timeout=5
+        )
+    except Exception:
+        # Never break main flow because of notification failure
+        pass
 
 # =========================
 # ROUTES
@@ -192,7 +222,11 @@ def status():
                 "gate": task["gate"],
                 "reason": "phone_timeout"
             }
-
+            # 🔔 Notify via Pushbullet (one-time event)
+            send_pushbullet(
+                title="OpenGate – Phone Timeout",
+                body=f"Gate '{task['gate']}' was NOT opened.\nReason: phone did not respond within {CLIENT_TIMEOUT}s."
+            )
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail))

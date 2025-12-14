@@ -14,7 +14,19 @@ Core components:
 • Android phone running MacroDroid
 • Client (CLI now, mobile app later)
 
-The phone is a passive executor.
+The phone is a stateless edge executor.
+The phone:
+• Polls for tasks
+• Executes the physical action
+• Reports success/failure
+
+The phone:
+• NEVER deletes tasks
+• NEVER touches Redis TTLs
+• NEVER manages locks
+• NEVER decides task outcome
+
+
 The server owns the logic.
 The client owns the lifecycle.
 
@@ -30,6 +42,28 @@ DESIGN PRINCIPLES
 • One task at a time (by design)
 • Clear task lifecycle with timestamps
 
+PHONE POLLING REQUIREMENT (CRITICAL)
+
+The phone MUST poll /phone_task every 2 seconds.
+
+This is not optional.
+
+Reason:
+
+Tasks have a 10-second execution window
+
+If the phone polls slower than that (e.g. every 8–10 seconds),
+the task may expire before being fetched
+
+This leads to false timeouts and missed executions
+
+Rule:
+• Poll interval: 2 seconds fixed (24/7)
+• No dynamic polling intervals
+• No sleep optimizations
+• No night/day differences
+
+The phone is a real-time edge executor, not a background client.
 ============================================================
 HIGH-LEVEL FLOW
 ============================================================

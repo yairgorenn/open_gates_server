@@ -300,6 +300,120 @@ INTENDED USAGE
 • One gate action at a time
 • High reliability preferred over scale
 
+
+============================================================
+AUDIT LOGS & REPORTING
+============================================================
+
+The system maintains a lightweight audit trail for gate openings.
+This is NOT part of the task lifecycle and does NOT affect execution.
+
+Logs are:
+• Write-only during operation
+• Time-limited (auto-expire)
+• Optimized for low volume & simplicity
+
+============================================================
+WHEN A LOG ENTRY IS CREATED
+============================================================
+
+A log entry is written when the client successfully requests a gate opening
+(i.e. during POST /open after validation succeeds).
+
+Logging occurs:
+• Once per open request
+• Independently of task execution outcome
+• Even if the phone later fails or times out
+
+============================================================
+LOG STORAGE MODEL (REDIS)
+============================================================
+
+Each log entry is stored as a standalone Redis key.
+
+Key format:
+gate:log:<timestamp>:<short_id>
+
+Example:
+gate:log:1765725458:6a75dd
+
+Value (JSON):
+{
+  "user": "Yair",
+  "token": "482913",
+  "gate": "Main",
+  "time": 1765725458
+}
+
+Time format:
+• Unix timestamp (seconds since 1970-01-01)
+• Matches industrial PLC conventions
+• Can be rendered to any date/time format later
+
+TTL:
+• 30 days (≈ 2,592,000 seconds)
+• Automatically deleted by Redis
+• No manual cleanup required
+
+============================================================
+WHY THIS DESIGN
+============================================================
+
+• No central list or index → avoids complexity
+• Redis TTL guarantees bounded memory usage
+• Keys are naturally ordered by time
+• Works perfectly for low-frequency usage
+• Zero impact on real-time gate operation
+
+This is an audit trail, not a database.
+
+============================================================
+HOW TO VIEW LOGS
+============================================================
+
+Logs can be inspected via:
+
+• Redis UI (Railway dashboard)
+• Redis CLI:
+  KEYS gate:log:*
+  GET gate:log:<full_key>
+
+Typical usage:
+• Manual inspection
+• Debugging
+• Simple reporting
+• Post-event verification
+
+============================================================
+WHAT LOGS ARE (AND ARE NOT)
+============================================================
+
+Logs ARE:
+• Immutable
+• Time-limited
+• Simple
+• Reliable
+
+Logs are NOT:
+• A billing system
+• A real-time monitoring feed
+• A replacement for a database
+• A compliance-grade audit system
+
+============================================================
+DESIGN PHILOSOPHY
+============================================================
+
+The system prioritizes:
+• Operational reliability
+• Deterministic behavior
+• Minimal moving parts
+
+Audit logging is intentionally simple.
+If requirements grow, logs can later be exported or mirrored elsewhere.
+
+============================================================
+
 ============================================================
 FUTURE EXTENSIONS (OPTIONAL)
 ============================================================
@@ -309,7 +423,7 @@ FUTURE EXTENSIONS (OPTIONAL)
 • Admin UI
 • Native Android app
 • HMAC-signed payloads
-• Audit logs
+
 
 ============================================================
 END OF DOCUMENT

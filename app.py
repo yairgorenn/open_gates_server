@@ -4,6 +4,7 @@ from datetime import datetime
 import redis
 import requests
 import uuid
+from zoneinfo import ZoneInfo
 
 
 
@@ -49,17 +50,24 @@ def get_gate(name):
     """Return gate definition by name."""
     return next((g for g in GATES if g["name"] == name), None)
 
+
 def gate_is_open_now(name):
-    """Check if gate is currently within allowed opening hours."""
+    """Check if gate is currently within allowed opening hours (Israel time)."""
     gate = get_gate(name)
     if not gate:
         return False
 
-    now = datetime.now().time()
+    now = datetime.now(ZoneInfo("Asia/Jerusalem")).time()
+
     for r in gate["open_hours"]:
-        if datetime.strptime(r["from"], "%H:%M").time() <= now <= datetime.strptime(r["to"], "%H:%M").time():
+        start = datetime.strptime(r["from"], "%H:%M").time()
+        end = datetime.strptime(r["to"], "%H:%M").time()
+
+        if start <= now <= end:
             return True
+
     return False
+
 
 
 def send_pushbullet(title, body):

@@ -44,6 +44,7 @@ GATES = [
     {"name": "Exit",      "phone_number": "972503924106", "open_hours": [{"from":"05:20","to":"21:00"}]},
     {"name": "EinCarmel", "phone_number": "972542688743", "open_hours": [{"from":"00:00","to":"23:59"}]},
     {"name": "Almagor",   "phone_number": "972503817647", "open_hours": [{"from":"00:00","to":"23:59"}]},
+    {"name": "DombiBack",   "phone_number": "972546913811", "open_hours": [{"from":"00:00","to":"23:59"}]},
 ]
 
 def get_gate(name):

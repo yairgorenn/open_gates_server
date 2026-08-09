@@ -6,8 +6,6 @@ import requests
 import uuid
 from zoneinfo import ZoneInfo
 
-
-
 app = Flask(__name__)
 
 # =========================
@@ -44,8 +42,9 @@ GATES = [
     {"name": "Exit",      "phone_number": "972503924106", "open_hours": [{"from":"05:20","to":"21:00"}]},
     {"name": "EinCarmel", "phone_number": "972542688743", "open_hours": [{"from":"00:00","to":"23:59"}]},
     {"name": "Almagor",   "phone_number": "972503817647", "open_hours": [{"from":"00:00","to":"23:59"}]},
-    {"name": "DombiBack",   "phone_number": "972546913811", "open_hours": [{"from":"00:00","to":"23:59"}]},
+    {"name": "DombiBack", "phone_number": "972546913811", "open_hours": [{"from":"00:00","to":"23:59"}]},
 ]
+
 
 def get_gate(name):
     """Return gate definition by name."""
@@ -68,7 +67,6 @@ def gate_is_open_now(name):
             return True
 
     return False
-
 
 
 def send_pushbullet(title, body):
@@ -106,7 +104,6 @@ def log_gate_open(user, token, gate_name):
     Each log is stored as a standalone key with a 30-day TTL.
     This function must NEVER affect the main flow.
     """
-
     try:
         ts = int(time.time())
         log_key = f"gate:log:{ts}:{uuid.uuid4().hex[:6]}"
@@ -156,7 +153,8 @@ def allowed_gates():
 def open_gate():
     """
     Create a new gate open task.
-    Only one active task or result is allowed at a time.
+    Redis lock acquisition is atomic, so repeated/parallel button presses
+    cannot create or overwrite more than one active task.
     """
     data = request.get_json(force=True) or {}
     token = data.get("token")
@@ -175,10 +173,30 @@ def open_gate():
     if not gate_is_open_now(gate_name):
         return jsonify({"error": "gate closed"}), 403
 
-    if rdb.exists(K_TASK) or rdb.exists(K_RESULT):
+    gate = get_gate(gate_name)
+    if not gate:
+        return jsonify({"error": "unknown gate"}), 400
+
+    # Do not start a new task while a previous result is waiting for the client.
+    if rdb.exists(K_RESULT):
         return jsonify({"error": "device busy"}), 409
 
-    gate = get_gate(gate_name)
+    # Atomic lock: only the first simultaneous request can continue.
+    lock_acquired = rdb.set(
+        K_LOCK,
+        "1",
+        nx=True,
+        ex=TASK_TTL
+    )
+
+    if not lock_acquired:
+        return jsonify({"error": "device busy"}), 409
+
+    # Defensive check for an already existing task.
+    if rdb.exists(K_TASK):
+        rdb.delete(K_LOCK)
+        return jsonify({"error": "device busy"}), 409
+
     task = {
         "task": "open",
         "gate": gate["name"],
@@ -186,10 +204,14 @@ def open_gate():
         "created_at": time.time()
     }
 
-    rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
-    rdb.set(K_LOCK, "1", ex=TASK_TTL)
+    try:
+        rdb.setex(K_TASK, TASK_TTL, json.dumps(task))
+    except Exception:
+        # Do not leave a stale lock if task creation fails.
+        rdb.delete(K_LOCK)
+        raise
 
-    # log redis
+    # Store audit log after the task was created successfully.
     log_gate_open(user, token, gate_name)
 
     return jsonify({"status": "task_created"}), 200
@@ -266,11 +288,12 @@ def status():
                 "gate": task["gate"],
                 "reason": "phone_timeout"
             }
-            # 🔔 Notify via Pushbullet (one-time event)
+
             send_pushbullet(
-                title="OpenGate – Phone Timeout",
+                title="OpenGate - Phone Timeout",
                 body=f"Gate '{task['gate']}' was NOT opened.\nReason: phone did not respond within {CLIENT_TIMEOUT}s."
             )
+
             rdb.delete(K_TASK)
             rdb.delete(K_LOCK)
             rdb.setex(K_RESULT, RESULT_TTL, json.dumps(fail))

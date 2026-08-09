@@ -24,8 +24,8 @@ rdb = redis.from_url(REDIS_URL, decode_responses=True)
 # =========================
 # CONFIG
 # =========================
-TASK_TTL = 25        # Max lifetime of a task (seconds)
-CLIENT_TIMEOUT = 20  # Client-side timeout (seconds)
+TASK_TTL = 35        # Max lifetime of a task (seconds)
+CLIENT_TIMEOUT = 25  # Client-side timeout (seconds)
 RESULT_TTL = 10      # Result retention time (seconds)
 
 K_TASK   = "gate:task"
